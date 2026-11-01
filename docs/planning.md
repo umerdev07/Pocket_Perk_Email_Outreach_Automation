@@ -73,6 +73,9 @@ PocketPerks ek simple email outreach automation tool hai: leads import karo, cam
 - Multi-step campaigns support.
 - Real sending se pehle test mode (koi real email nahi jati).
 - Sending ka real status track ho; fake success response kabhi nahi.
+- User campaign, imported lead batch aur start/end time choose karke ek baar **Start Campaign** kare. Backend ka durable worker personalization, risk routing aur eligible scheduled sends background mein continue kare; browser/dialog close hone se run na ruke.
+- Har outgoing marketing email mein PocketPerks/sender ki pehchan aur seedha opt-out tareeqa ho (for example, recipient reply karke future emails rok sake). Opt-out ko normalized email ke saath suppression/do-not-contact record mein save karo, aur har future import/run/send se pehle us list ke against check karo. Opt-out request ke baad us recipient ko dobara send na ho.
+- Sending se pehle lead ki subscriber/business type eligibility record ya verify ho. Opt-out line individual subscribers ke liye consent/soft-opt-in ki zaroorat ko replace nahi karti; uncertain eligibility par send rok kar review/confirmation chahiye.
 
 ### 2.6 Lead Replies
 
@@ -149,9 +152,11 @@ Har email ke saath `risk_level` aur `risk_reason` save hoga; reviewer ko reason 
 
 ### 3.5 Instantly sending (pehle docs verify karna)
 
-Instantly mein standalone "send one email" endpoint par bharosa nahi karna. Implementation se pehle official API docs padhne hain aur sending mechanism confirm karna hai. Zyada mumkin approach: ek Instantly campaign (sequence) banana ya use karna, lead ko custom variables ke saath add karna, aur approved subject/body variables ke zariye bhejna. Final approach Stage 7 ki shuruat mein docs dekh kar tay hogi aur yahan update hogi.
+Instantly ko sirf actual email delivery, provider status aur replies ke liye use karna; lead discovery/Apify integration abhi scope mein nahi. Apify research user manually karega, phir apni CSV/XLSX lead file PocketPerks mein import karega. PocketPerks se Instantly tak har eligible business ki approved personalized subject/body aur recipient jayegi; Instantly mein leads ko bulk-import karna product requirement nahi hai.
 
-**Client ka Instantly account:** account tayyar hai aur uske sending accounts (kuch emails) connected hain. API key milne par Stage 7 mein pehle unhein API se list kar ke verify karenge, phir hi sending design final hogi.
+Instantly mein standalone "send one email" endpoint par bharosa nahi karna. Implementation se pehle official API docs padh kar sending mechanism confirm karo: har lead ka apna personalized subject/body, campaign scheduling, follow-up timing, status callbacks aur minimum write scopes. Final design ko docs verification ke baad yahan update karo.
+
+**Client ka Instantly account:** API key ka read-only test ho chuka hai aur 6 connected sending accounts list hue. Yeh sirf account-read verification tha; is se sending capability ya email delivery verify nahi hoti.
 
 - `SEND_MODE=test` (default): koi Instantly call nahi, email DB mein `sent_test` mark; UI par "TEST" badge.
 - `SEND_MODE=live`: real Instantly calls; asli response save hota hai, error aaye to status `failed` + error text.
@@ -161,6 +166,7 @@ Instantly mein standalone "send one email" endpoint par bharosa nahi karna. Impl
 - Primary: Instantly webhook (reply event) → `POST /api/webhooks/instantly`.
 - Fallback: manual "Refresh" button jo Instantly se replies fetch kare.
 - Local mein webhook ke liye tunnel (ngrok/cloudflared) chahiye; match lead email + Instantly campaign/lead id se.
+- Opt-out/rejection replies ko record karke suppression list mein daalne ka workflow define karo; ambiguous natural-language replies ko automatic opt-out samajhne ke bajaye human review mein bhejo.
 
 ### 3.7 Environment variables (backend `.env` only)
 
@@ -431,7 +437,8 @@ Koi fake business data repo mein nahi. Testing ke liye user apni asli (ya sample
 - Tay: client ka Instantly account maujood hai, kuch sending emails connected hain.
 - Tay: OpenRouter par free model.
 - Tay: target UK cafés aur restaurants; email mein PocketPerks Loyalty Stamp ka pitch.
-- Tay: unsubscribe/opt-out line zaroori nahi; sender address email mein rahega (neeche confirm karein).
+- Tay: Apify ke through lead discovery abhi manually hoti hai; user CSV/XLSX import karega. Apify API integration abhi nahi karni.
+- Tay: har marketing email mein sender identity aur opt-out tareeqa hoga; opt-outs future sends se suppress honge. Individual subscriber eligibility ko send se pehle handle karna hoga.
 
 * [ ] Sender address ka matlab: kya email ke neeche business ka naam + address footer chahiye? Format kya ho?
 * [ ] Steps ke beech default delay 3 din theek hai?
@@ -441,9 +448,12 @@ Koi fake business data repo mein nahi. Testing ke liye user apni asli (ya sample
 
 
 ### Campaign scheduling requirements (confirmed)
-- Campaigns have a start date and end date. The current implementation stores these dates only; they do not trigger sends yet.
-- Once sending is implemented, step 1 may send no earlier than the start date; later steps must respect each step’s `delay_days` (currently 3 days). Do not send any step after the end date.
+- Campaigns have a start date/time and end date/time in the UK timezone. The current implementation stores date fields only; they do not trigger sends yet, so time-of-day scheduling and timezone handling still need implementation/migration.
+- Once sending is implemented, spread the campaign's available window across its email steps for each lead, respecting any configured follow-up delay and provider limits. Never send before the start time or after the end time. If the window cannot fit the configured steps safely, hold the run and show a clear reason instead of sending all steps together.
 - Sending must use a durable database-backed queue/scheduler and idempotent worker so queued messages survive app/browser closure, server restarts, and worker retries. Never mark `sent` until Instantly confirms a successful send.
+- Starting a campaign is intended to be the one-click handoff for the chosen imported batch and approved campaign: personalization, risk routing, scheduling, and provider sends happen in the backend. Closing the browser must not cancel this work. Keep `SEND_MODE=test` until the full provider path and user authorization are verified.
+- Replies must sync into the PocketPerks inbox and be linked back to the lead/campaign/email when possible. Reply sync remains part of Stage 7 delivery completion.
+- Every email includes sender identity and a clear opt-out route. Persist opt-outs in a suppression list and exclude them from later sends. Before live sending, classify/confirm subscriber eligibility; the opt-out route does not itself authorize marketing to individual subscribers.
 - The current text-level spam check can flag obvious wording/format patterns but cannot predict Gmail Inbox versus Spam placement; reputation, authentication, engagement, and provider-side signals are outside the app's text-only check.
 - The text-only risk estimate specifically checks deceptive urgency, unrealistic promises/prizes, coercive click/account-verification language, financial bait, fake reply/forward subjects, excessive capitals/punctuation, unusually long copy, and multiple links. LOW is queued automatically; concrete MEDIUM/HIGH content signals are shown for human review.
 - Campaign targeting is derived from the selected lead batch and campaign instructions. There is no separate campaign city field. Instructions should not constrain the campaign to one city unless the imported batch is intentionally limited to that city.
@@ -456,4 +466,6 @@ Koi fake business data repo mein nahi. Testing ke liye user apni asli (ya sample
 - [ ] Re-run full backend pytest and frontend production build in the user's local Windows environment; current Codex run was blocked/stalled by environment issues.
 
 ### Next implementation slice
-- Stage 7.2 starts with an official Instantly API capability review: verify whether API v2 can send each lead's distinct personalized subject/body and support scheduled steps, and identify the minimum write scopes. Do not enable live sending while this is being researched or implemented.
+- Stage 7.1 is complete: read-only Instantly client and live account-list check succeeded (6 accounts); no sends were made.
+- Stage 7.2 is pending: review official Instantly API docs for per-lead personalized subject/body, campaign/sequence mechanics, scheduling/follow-ups, reply sync, and minimum write scopes. Apify API integration is explicitly out of scope for now.
+- Stage 7.3 will implement the test-mode, durable one-click sending workflow, opt-out/suppression handling, send-status tracking, and scheduled follow-ups. Stage 8 will complete reply ingestion/inbox integration if not covered by the verified Instantly path. Do not enable live sends until documentation, eligibility checks, opt-out handling, and user authorization are in place.

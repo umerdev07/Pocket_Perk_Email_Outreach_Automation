@@ -196,3 +196,83 @@ input, textarea, select { max-width: 100%; }
   .review-history-top { flex-direction: column; }
   .header-account-link { margin-left: 7px; font-size: 11px; }
 }
+
+/* PocketPerks brand system: warm white, product green, and a restrained red accent. */
+:root {
+  --ink: #18352a;
+  --muted: #66776d;
+  --line: #e2e9e2;
+  --violet: #16843c;
+  --paper: #f7f8f4;
+  --brand-red: #d92f3c;
+  --brand-green: #16843c;
+  --brand-green-dark: #116b32;
+  --brand-green-soft: #edf7ef;
+  --brand-red-soft: #fff1f1;
+}
+
+body { background: var(--paper); color: var(--ink); }
+.sidebar, .main > header, .card, .stats article, .dashboard-metric { background-color: #fff; }
+.brand { color: var(--ink); }
+.mark {
+  color: #fff;
+  background: linear-gradient(140deg, var(--brand-red) 0 48%, var(--brand-green) 52% 100%);
+  box-shadow: 0 4px 10px rgb(24 53 42 / 12%);
+}
+.nav { color: #586b60; }
+.nav.active { color: var(--brand-green-dark); background: var(--brand-green-soft); }
+.nav:hover:not(.active) { color: var(--brand-red); background: #fff7f5; }
+.profile .profile-identity b { color: var(--brand-red); background: var(--brand-red-soft); }
+.action-button, .actions button, .start button {
+  background: var(--brand-green);
+  box-shadow: 0 4px 10px rgb(22 132 60 / 12%);
+}
+.action-button:hover:not(:disabled), .actions button:hover:not(:disabled), .start button:hover:not(:disabled) {
+  background: var(--brand-green-dark);
+  box-shadow: 0 6px 14px rgb(17 107 50 / 18%);
+}
+.secondary-button { border-color: #d8e3d9; }
+.secondary-button:hover:not(:disabled) { border-color: #b8d3bd; background: #f7fbf7; }
+.drop { border-color: #b9d7c0; background: #f8fbf7; }
+.drop b { color: var(--brand-green-dark); background: var(--brand-green-soft); }
+.drop em, .reason, .review-back, .no-approved button, .batch-file-button,
+.batch-detail-tabs button.active, .dashboard-links button, .link-button,
+.account-settings-link, .header-account-link, .auth-reset-link { color: var(--brand-green-dark); }
+.start-summary, .run-progress { border-color: #d2e7d5; background: var(--brand-green-soft); color: #285c37; }
+.run-progress progress { accent-color: var(--brand-green); }
+.campaign-clickable:hover { background: #f5faf5; }
+.campaign-form input:focus, .campaign-form textarea:focus,
+.review-field input:focus, .review-field textarea:focus,
+.approval-field input:focus, .approval-field textarea:focus {
+  border-color: var(--brand-green);
+  outline: 2px solid #16843c24;
+}
+.dashboard-metric.violet { border-top-color: var(--brand-red); }
+.dashboard-metric.green { border-top-color: var(--brand-green); }
+.toast { background: var(--brand-green-dark); }
+.batch-view-email { border-color: #cfe4d2; background: var(--brand-green-soft); color: var(--brand-green-dark); }
+.batch-detail-tabs button.active { border-bottom-color: var(--brand-green); }
+.approval-tabs button.active { border-bottom-color: var(--brand-green); color: var(--brand-green-dark); }
+.approval-tabs button span { background: var(--brand-green-soft); color: var(--brand-green-dark); }
+:focus-visible { outline-color: #16843c; }
+
+.auth-screen { background: radial-gradient(circle at 8% 10%, #fbe9e8 0, transparent 32%), var(--paper); }
+.auth-promo {
+  background:
+    radial-gradient(ellipse at 92% 92%, #e5f3e7 0, transparent 38%),
+    radial-gradient(ellipse at 8% 8%, #fff0ed 0, transparent 34%),
+    linear-gradient(145deg, #fff 0%, #fbfcf8 58%, #f4f8f3 100%);
+}
+.auth-promo::before, .auth-promo::after { border-color: #d92f3c18; }
+.auth-promo::before { box-shadow: 0 0 0 34px #16843c0a, 0 0 0 70px #d92f3c08; }
+.auth-promo::after { background: #16843c0a; }
+.auth-promo .auth-mark { color: #fff; background: linear-gradient(140deg, var(--brand-red) 0 48%, var(--brand-green) 52% 100%); border-color: #ffffff90; }
+.auth-promo-pill { border-color: #d8e8d9; color: var(--brand-green-dark); background: #fff; }
+.auth-flow b, .auth-promo-footer span { color: var(--brand-red); }
+.auth-card { border-color: var(--line); box-shadow: 0 18px 55px rgb(24 53 42 / 9%); }
+.auth-card-kicker { color: var(--brand-red); }
+.auth-card input:focus { border-color: var(--brand-green); box-shadow: 0 0 0 4px #16843c1c; }
+.auth-card .action-button { background: linear-gradient(100deg, #16843c, #23964b); box-shadow: 0 7px 16px #16843c24; }
+.auth-lock { color: var(--brand-green-dark); background: var(--brand-green-soft); }
+.auth-spinner { border-color: #dcebdc; border-top-color: var(--brand-green); }
+.auth-reset-link:hover:not(:disabled), .account-settings-link:hover, .header-account-link:hover { color: var(--brand-red); }
