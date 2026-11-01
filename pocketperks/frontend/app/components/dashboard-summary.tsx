@@ -1,5 +1,7 @@
 "use client";
 
+import { apiFetch } from "../../lib/auth";
+
 import { useCallback, useEffect, useState } from "react";
 
 type Summary = {
@@ -26,7 +28,7 @@ export default function DashboardSummary({ apiBase, refreshKey, onNavigate }: Pr
     setLoading(true);
     setError("");
     try {
-      const response = await fetch(`${apiBase}/api/dashboard/summary`);
+      const response = await apiFetch(`${apiBase}/api/dashboard/summary`);
       const data = await response.json() as Summary & { detail?: string };
       if (!response.ok) throw new Error(data.detail || "Could not load dashboard totals.");
       setSummary(data);

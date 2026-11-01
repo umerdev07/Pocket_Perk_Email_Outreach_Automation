@@ -10,7 +10,7 @@ from app.campaigns_db import get_campaign
 
 def test_context_count_mismatch_is_rejected():
     with patch("app.routers.campaigns.create_campaign", new=AsyncMock()) as save:
-        response = TestClient(create_app()).post("/api/campaigns", json={
+        response = TestClient(create_app(auth_enabled=False)).post("/api/campaigns", json={
             "name": "Cafe outreach", "total_emails": 2,
             "instructions": "Introduce loyalty stamps", "start_date": "2026-11-01", "end_date": "2026-11-30", "contexts": ["First email"],
         })
@@ -19,7 +19,7 @@ def test_context_count_mismatch_is_rejected():
 
 
 def test_email_count_outside_bounds_is_rejected():
-    client = TestClient(create_app())
+    client = TestClient(create_app(auth_enabled=False))
     for count in (0, 11):
         response = client.post("/api/campaigns", json={
             "name": "Cafe outreach", "total_emails": count,
@@ -34,7 +34,7 @@ def test_valid_campaign_and_steps_are_saved_through_database_module():
         {"step_number": 2, "context": "Follow-up", "delay_days": 3},
     ]}
     with patch("app.routers.campaigns.create_campaign", new=AsyncMock(return_value=expected)) as save:
-        response = TestClient(create_app()).post("/api/campaigns", json={
+        response = TestClient(create_app(auth_enabled=False)).post("/api/campaigns", json={
             "name": "Cafe outreach", "total_emails": 2,
             "instructions": "Introduce loyalty stamps", "start_date": "2026-11-01", "end_date": "2026-11-30", "contexts": ["Introduction", "Follow-up"],
         })
@@ -47,7 +47,7 @@ def test_valid_campaign_and_steps_are_saved_through_database_module():
 
 def test_campaign_end_date_before_start_date_is_rejected():
     with patch("app.routers.campaigns.create_campaign", new=AsyncMock()) as save:
-        response = TestClient(create_app()).post("/api/campaigns", json={
+        response = TestClient(create_app(auth_enabled=False)).post("/api/campaigns", json={
             "name": "Cafe outreach", "total_emails": 1,
             "instructions": "Introduce loyalty stamps", "start_date": "2026-11-10",
             "end_date": "2026-11-09", "contexts": ["Introduction"],
@@ -80,7 +80,7 @@ def test_campaign_detail_accepts_one_to_one_draft_object_from_postgrest():
 def test_delete_campaign_endpoint_deletes_through_database_module():
     campaign_id = "66e8dff4-94de-42eb-9e2c-5def2dbde0cb"
     with patch("app.routers.campaigns.delete_campaign", new=AsyncMock()) as delete:
-        response = TestClient(create_app()).delete(f"/api/campaigns/{campaign_id}")
+        response = TestClient(create_app(auth_enabled=False)).delete(f"/api/campaigns/{campaign_id}")
     assert response.status_code == 204
     delete.assert_awaited_once()
     assert delete.await_args.args[1] == campaign_id
@@ -91,7 +91,7 @@ def test_delete_campaign_step_endpoint_uses_database_module():
     step_id = "9be8dff4-94de-42eb-9e2c-5def2dbde0cb"
     expected = {"deleted": True, "campaign_id": campaign_id, "total_emails": 1}
     with patch("app.routers.campaigns.delete_campaign_step", new=AsyncMock(return_value=expected)) as delete:
-        response = TestClient(create_app()).delete(f"/api/campaigns/{campaign_id}/steps/{step_id}")
+        response = TestClient(create_app(auth_enabled=False)).delete(f"/api/campaigns/{campaign_id}/steps/{step_id}")
     assert response.status_code == 200
     assert response.json() == expected
     delete.assert_awaited_once()

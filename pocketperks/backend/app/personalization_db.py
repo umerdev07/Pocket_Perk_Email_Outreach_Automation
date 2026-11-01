@@ -143,10 +143,28 @@ async def get_run_lead_personalized_emails(settings: Settings, run_id: str, lead
 async def save_personalized_email(settings: Settings, email: dict) -> dict:
     async with httpx.AsyncClient(timeout=20) as client:
         response = await client.post(f"{_base(settings)}/personalized_emails",
-            headers=_headers(settings, "return=representation"), json=email)
+            params={"on_conflict": "run_id,lead_id,step_id"},
+            headers=_headers(settings, "resolution=ignore-duplicates,return=representation"), json=email)
     if not response.is_success:
         raise HTTPException(status_code=503, detail="Could not save a personalized email.")
-    return response.json()[0]
+    rows = response.json()
+    return rows[0] if rows else {}
+
+
+async def get_existing_personalization_keys(settings: Settings, run_id: str,
+                                            lead_ids: list[str]) -> set[tuple[str, str]]:
+    """Load saved lead/step pairs for one small chunk to avoid repeat AI calls after a restart."""
+    if not lead_ids or not settings.supabase_url or not settings.supabase_service_key:
+        return set()
+    # Keep this query explicit: the bounded lead page contains at most one work chunk.
+    async with httpx.AsyncClient(timeout=20) as client:
+        response = await client.get(f"{_base(settings)}/personalized_emails", params={
+            "select": "lead_id,step_id", "run_id": f"eq.{run_id}",
+            "lead_id": f"in.({','.join(lead_ids)})", "limit": "1000",
+        }, headers=_headers(settings))
+    if not response.is_success:
+        raise HTTPException(status_code=503, detail="Could not check saved personalized emails for this run.")
+    return {(row["lead_id"], row["step_id"]) for row in response.json()}
 
 
 async def update_run_progress(settings: Settings, run_id: str, *, processed: int, skipped: int,

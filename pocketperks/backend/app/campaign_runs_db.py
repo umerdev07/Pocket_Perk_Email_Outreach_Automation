@@ -51,6 +51,9 @@ async def start_campaign_run(settings: Settings, campaign_id: str, batch_id: str
             "status": "running",
             "total_leads": total_leads,
         })
+        if getattr(run_response, "status_code", None) == 409:
+            raise HTTPException(status_code=409,
+                                detail="This campaign is already processing this lead batch. Wait for it to finish.")
         if not run_response.is_success or not run_response.json():
             raise HTTPException(status_code=503, detail="Could not create the campaign run.")
     row = run_response.json()[0]

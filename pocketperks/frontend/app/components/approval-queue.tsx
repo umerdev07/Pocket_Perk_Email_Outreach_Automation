@@ -1,5 +1,7 @@
 "use client";
 
+import { apiFetch } from "../../lib/auth";
+
 import { useEffect, useState } from "react";
 
 type ApprovalEmail = {
@@ -43,7 +45,7 @@ export default function ApprovalQueue({ apiBase, notify }: Props) {
     setMoreBusy(append);
     setError("");
     try {
-      const response = await fetch(`${apiBase}/api/approvals?limit=50&offset=${offset}`);
+      const response = await apiFetch(`${apiBase}/api/approvals?limit=50&offset=${offset}`);
       const data = await response.json() as QueuePage & { detail?: string };
       if (!response.ok) throw new Error(data.detail || "Could not load the approval queue.");
       setItems(current => append ? [...current, ...data.items] : data.items);
@@ -65,7 +67,7 @@ export default function ApprovalQueue({ apiBase, notify }: Props) {
     setHistoryLoading(true);
     setError("");
     try {
-      const response = await fetch(`${apiBase}/api/approvals/history?limit=100&offset=0`);
+      const response = await apiFetch(`${apiBase}/api/approvals/history?limit=100&offset=0`);
       const data = await response.json() as HistoryEntry[] & { detail?: string };
       if (!response.ok) throw new Error(data.detail || "Could not load email review history.");
       setHistory(data);
@@ -87,7 +89,7 @@ export default function ApprovalQueue({ apiBase, notify }: Props) {
     setBusy(selected.id);
     setError("");
     try {
-      const response = await fetch(`${apiBase}/api/emails/${selected.id}`, {
+      const response = await apiFetch(`${apiBase}/api/emails/${selected.id}`, {
         method: "PATCH", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ subject, body }),
       });
@@ -108,7 +110,7 @@ export default function ApprovalQueue({ apiBase, notify }: Props) {
     setBusy(selected.id);
     setError("");
     try {
-      const response = await fetch(`${apiBase}/api/emails/${selected.id}/recheck`, { method: "POST" });
+      const response = await apiFetch(`${apiBase}/api/emails/${selected.id}/recheck`, { method: "POST" });
       const data = await response.json() as { auto_queued?: boolean; risk_level?: "LOW" | "MEDIUM" | "HIGH";
         risk_reason?: string; detail?: string };
       if (!response.ok) throw new Error(data.detail || "Could not recheck this email.");
@@ -137,7 +139,7 @@ export default function ApprovalQueue({ apiBase, notify }: Props) {
     setBusy(selected.id);
     setError("");
     try {
-      const response = await fetch(`${apiBase}/api/emails/${selected.id}/${action}`, { method: "POST" });
+      const response = await apiFetch(`${apiBase}/api/emails/${selected.id}/${action}`, { method: "POST" });
       const data = await response.json();
       if (!response.ok) throw new Error(data.detail || `Could not ${action} this email.`);
       const remaining = items.filter(item => item.id !== selected.id);
@@ -222,6 +224,7 @@ export default function ApprovalQueue({ apiBase, notify }: Props) {
             <p className="approval-context"><b>Campaign instructions:</b> {selected.campaign.instructions || "No campaign instructions recorded."}</p>
             {selected.step.context && <p className="approval-context"><b>Email context:</b> {selected.step.context}</p>}
             <p className="approval-send-note">Approving places this email in the send queue. It will not be marked sent until Instantly confirms a real send.</p>
+            <label className="approval-field">To<input type="email" value={selected.lead.email || "Recipient email unavailable"} readOnly /></label>
             <label className="approval-field">Subject<input value={subject} onChange={event => setSubject(event.target.value)} /></label>
             <label className="approval-field">Email body<textarea rows={10} value={body} onChange={event => setBody(event.target.value)} /></label>
             <div className="approval-actions">

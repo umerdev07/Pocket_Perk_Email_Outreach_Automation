@@ -9,14 +9,14 @@ from app.main import create_app
 
 def test_health_connected():
     with patch("app.main.check_database", new=AsyncMock(return_value=True)):
-        response = TestClient(create_app()).get("/api/health")
+        response = TestClient(create_app(auth_enabled=False)).get("/api/health")
     assert response.status_code == 200
     assert response.json()["database"] == "connected"
 
 
 def test_health_unavailable_does_not_claim_success():
     with patch("app.main.check_database", new=AsyncMock(return_value=False)):
-        response = TestClient(create_app()).get("/api/health")
+        response = TestClient(create_app(auth_enabled=False)).get("/api/health")
     assert response.status_code == 503
     assert response.json()["backend"] == "ok"
     assert response.json()["database"] == "unavailable"
@@ -24,7 +24,7 @@ def test_health_unavailable_does_not_claim_success():
 
 
 def test_cors_for_frontend():
-    response = TestClient(create_app()).options("/api/health", headers={
+    response = TestClient(create_app(auth_enabled=False)).options("/api/health", headers={
         "Origin": "http://localhost:3000", "Access-Control-Request-Method": "GET",
     })
     assert response.headers["access-control-allow-origin"] == "http://localhost:3000"

@@ -36,7 +36,7 @@ def test_report_returns_batch_counts_and_selected_number_of_leads():
     ]
     FakeClient.requests = []
     with patch("app.routers.leads.httpx.AsyncClient", FakeClient):
-        response = TestClient(create_app()).get(f"/api/lead-batches/{batch_id}/report?limit=5")
+        response = TestClient(create_app(auth_enabled=False)).get(f"/api/lead-batches/{batch_id}/report?limit=5")
     assert response.status_code == 200
     assert response.json()["batch"]["imported_count"] == 10
     assert response.json()["shown"] == 5
@@ -45,14 +45,14 @@ def test_report_returns_batch_counts_and_selected_number_of_leads():
 
 
 def test_report_limit_only_accepts_five_or_ten():
-    response = TestClient(create_app()).get(f"/api/lead-batches/{uuid4()}/report?limit=7")
+    response = TestClient(create_app(auth_enabled=False)).get(f"/api/lead-batches/{uuid4()}/report?limit=7")
     assert response.status_code == 422
 
 
 def test_delete_lead_batch_endpoint_deletes_through_database_module():
     batch_id = uuid4()
     with patch("app.routers.leads.delete_lead_batch", new=AsyncMock()) as delete:
-        response = TestClient(create_app()).delete(f"/api/lead-batches/{batch_id}")
+        response = TestClient(create_app(auth_enabled=False)).delete(f"/api/lead-batches/{batch_id}")
     assert response.status_code == 204
     delete.assert_awaited_once()
     assert delete.await_args.args[1] == str(batch_id)
@@ -64,7 +64,7 @@ def test_batch_details_endpoint_defaults_to_imported_rows_and_pagination():
                 "rows": [{"business_name": "Leeds Cafe"}], "total": 73, "limit": 50, "offset": 0,
                 "has_more": True}
     with patch("app.routers.leads.get_lead_batch_details", new=AsyncMock(return_value=expected)) as details:
-        response = TestClient(create_app()).get(f"/api/lead-batches/{batch_id}/details")
+        response = TestClient(create_app(auth_enabled=False)).get(f"/api/lead-batches/{batch_id}/details")
     assert response.status_code == 200
     assert response.json() == expected
     assert details.await_args.args[1] == str(batch_id)
@@ -73,7 +73,7 @@ def test_batch_details_endpoint_defaults_to_imported_rows_and_pagination():
 
 def test_batch_details_rejects_invalid_view():
     with patch("app.routers.leads.get_lead_batch_details", new=AsyncMock()) as details:
-        response = TestClient(create_app()).get(f"/api/lead-batches/{uuid4()}/details?view=all")
+        response = TestClient(create_app(auth_enabled=False)).get(f"/api/lead-batches/{uuid4()}/details?view=all")
     assert response.status_code == 422
     details.assert_not_awaited()
 
@@ -82,7 +82,7 @@ def test_batch_lead_emails_endpoint_returns_all_campaign_emails_for_lead():
     batch_id, lead_id = uuid4(), uuid4()
     expected = {"lead": {"id": str(lead_id)}, "items": [{"subject": "Hello", "campaign": {"name": "Leeds outreach"}}]}
     with patch("app.routers.leads.get_batch_lead_personalized_emails", new=AsyncMock(return_value=expected)) as emails:
-        response = TestClient(create_app()).get(
+        response = TestClient(create_app(auth_enabled=False)).get(
             f"/api/lead-batches/{batch_id}/leads/{lead_id}/personalized-emails")
     assert response.status_code == 200
     assert response.json() == expected

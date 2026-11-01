@@ -37,7 +37,7 @@ def _rule_assessment(subject: str, body: str, draft: dict, lead: dict,
     matched_patterns = [name for name, pattern in SPAM_PATTERNS.items() if pattern.search(text)]
     if matched_patterns:
         points += 2 * len(matched_patterns)
-        reasons.append("Spam-like wording: " + ", ".join(matched_patterns) + ".")
+        reasons.append("Spam-like wording associated with spam filters: " + ", ".join(matched_patterns) + ".")
     if ALL_CAPS_RE.search(text):
         points += 1
         reasons.append("Several consecutive words are written in all capitals.")
@@ -109,7 +109,7 @@ async def assess_personalized_email(subject: str, body: str, *, draft: dict, lea
     ai_level, ai_reason = ai_result
     final_level = max((rule_level, ai_level), key=LEVELS.__getitem__)
     if ai_level != "LOW":
-        reasons.append(f"Content spam-risk estimate: {ai_reason}")
+        reasons.append(f"AI spam-risk check: {ai_reason}")
     if not reasons:
         reasons.append("No obvious content-level spam signals found; Gmail placement is not guaranteed.")
     return {"risk_level": final_level, "risk_reason": "; ".join(reasons)[:1000]}

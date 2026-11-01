@@ -1,5 +1,7 @@
 "use client";
 
+import { apiFetch } from "../../lib/auth";
+
 import { useEffect, useRef, useState } from "react";
 
 type Batch = { id: string; file_name: string; total_rows?: number; imported_count: number; duplicate_count?: number;
@@ -38,7 +40,7 @@ export default function BatchDetailsPanel({ apiBase, batch, onStart }: { apiBase
     async function load() {
       setBusy(true); setError("");
       try {
-        const response = await fetch(`${apiBase}/api/lead-batches/${batch.id}/details?view=${view}&limit=50&offset=${offset}`);
+        const response = await apiFetch(`${apiBase}/api/lead-batches/${batch.id}/details?view=${view}&limit=50&offset=${offset}`);
         const data = await response.json() as Page & { detail?: string };
         if (!response.ok) throw new Error(data.detail || "Could not load this import’s records.");
         if (active) setPage(data);
@@ -62,7 +64,7 @@ export default function BatchDetailsPanel({ apiBase, batch, onStart }: { apiBase
     if (emailsByLead[leadId]) return;
     setEmailBusy(leadId);
     try {
-      const response = await fetch(`${apiBase}/api/lead-batches/${batch.id}/leads/${leadId}/personalized-emails`);
+      const response = await apiFetch(`${apiBase}/api/lead-batches/${batch.id}/leads/${leadId}/personalized-emails`);
       const data = await response.json() as LeadEmails & { detail?: string };
       if (!response.ok) throw new Error(data.detail || "Could not load personalized emails for this lead.");
       setEmailsByLead(current => ({ ...current, [leadId]: data }));
@@ -82,7 +84,7 @@ export default function BatchDetailsPanel({ apiBase, batch, onStart }: { apiBase
   async function saveEmail(leadId: string, email: Email) {
     setSavingId(email.id); setEmailError(""); setSavedMessage("");
     try {
-      const response = await fetch(`${apiBase}/api/emails/${email.id}`, {
+      const response = await apiFetch(`${apiBase}/api/emails/${email.id}`, {
         method: "PATCH", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ subject: email.subject, body: email.body }),
       });
@@ -121,6 +123,7 @@ export default function BatchDetailsPanel({ apiBase, batch, onStart }: { apiBase
         {emailBusy === expandedLead ? <p className="batch-detail-loading">Loading this lead’s personalized emails…</p> : emailError ? <p role="alert" className="error">{emailError}</p> : !(emailsByLead[expandedLead]?.items.length) ? <p className="batch-detail-loading">No personalized emails found for this lead yet.</p> : <div className="batch-email-cards">{emailsByLead[expandedLead].items.map(email => <article className="batch-email-card" key={email.id}>
           <div className="batch-email-card-head"><div><small className="eyebrow">{email.campaign?.name || "Campaign"}</small><h4>Email {email.step?.step_number ?? "—"}</h4></div><span className={`badge ${email.status}`}>{email.status.replaceAll("_", " ")}</span></div>
           {email.step?.context && <p className="batch-email-context"><b>Context</b><br/>{email.step.context}</p>}
+          <label>To<input type="email" value={emailsByLead[expandedLead].lead.email || "Recipient email unavailable"} readOnly/></label>
           <label>Subject<input value={email.subject} onChange={event => changeEmail(expandedLead, email.id, "subject", event.target.value)}/></label>
           <label>Body<textarea rows={8} value={email.body} onChange={event => changeEmail(expandedLead, email.id, "body", event.target.value)}/></label>
           {email.risk_reason && <small className="batch-email-risk">Risk: {email.risk_level || "unknown"} · {email.risk_reason}</small>}

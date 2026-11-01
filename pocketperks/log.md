@@ -2,6 +2,21 @@
 
 This log records completed work and verification reported in this project chat. Secrets and `.env` contents are never recorded here.
 
+## Internal workspace authentication and authorization
+- Added invite-only Supabase Auth sign-in to the frontend; application API requests now carry the user's access token and refresh expired sessions.
+- Added FastAPI-side token verification and workspace membership lookup. Protected API endpoints require an active workspace member; health remains public for service checks.
+- Added Admin, Operator and Reviewer roles. Admin can use all API actions including deletes; Operator handles normal imports/campaigns/personalization; Reviewer gets dashboard and the human approval workflow. Reviewer cannot reach campaign/import endpoints.
+- Added `supabase/migrations/010_workspace_auth.sql` for the RLS-enabled `workspace_members` role table. Browser roles have no table grants; server-side role checks use the service key.
+- Added frontend/backend environment variable examples and setup notes. New user sign-up must be disabled and employee accounts invited through Supabase Auth; membership roles must be assigned after inviting.
+- Not yet applied or verified against the live Supabase project. Do not deploy the frontend/API until migration 010, auth environment values, invite-only settings and at least one admin membership are configured.
+- On first local sign-in attempt, the UI showed `Failed to fetch`. Confirmed both env files exist and their Supabase project URLs and public keys match without displaying values. Improved network errors to distinguish Supabase Auth connectivity from backend connectivity. Backend import and frontend typecheck passed; live browser request could not be inspected in this session.
+- Added a password-recovery link to the sign-in page and a reset-password page. Recovery uses the email belonging to the Admin Auth user; the user chooses a new password, while the app avoids exposing or reading any existing password. Frontend typecheck passed. Supabase redirect allowlist must include `http://localhost:3000/auth/reset-password` before sending a reset email.
+- Auth UI now uses a responsive product-style sign-in layout, clearer recovery/access states, and a dedicated reset screen. Sidebar identity now uses a bounded two-line layout with ellipsis for long email addresses, preventing overlap with the role label.
+- Added a `create_app(auth_enabled=False)` test-only seam and updated route tests to opt into it; added offline auth/RBAC regression tests for sign-in requirement, reviewer boundaries and operator approval restrictions. Full pytest invocation produced no output in this environment and was stopped; rerun locally.
+- Frontend `npm run typecheck` passed. Production webpack build was blocked by Windows `EPERM` while creating a directory under `frontend/.next` in the OneDrive project; no visual browser check was possible in this session.
+- Follow-up visual alignment: changed the auth promo panel from deep navy to the app's existing light paper/white/slate/violet palette, keeping the same responsive layout and violet primary actions. Frontend typecheck passed.
+- Deferred the separate Reviewer account and permission check at the user's request; added it plus the local auth smoke/build checks to `docs/planning.md`. The next planned slice is Stage 7.2: verify official Instantly API support for per-lead personalized content, scheduling and minimum write scopes before implementing sending.
+
 ## Stage 1 — Foundation
 - Created FastAPI backend, Next.js frontend, Supabase initial schema, README, and health check.
 - User reported `python -m pytest` with 4 passing tests, `npm run build` passing, and `/api/health` running.
@@ -137,3 +152,33 @@ This log records completed work and verification reported in this project chat. 
 - HIGH is reserved for multiple strong signals; MEDIUM identifies a concrete signal; LOW has no strong text signal and is automatically queued. Human Approval now describes this as a spam-likelihood/content estimate and shows the matched reason.
 - The OpenRouter risk prompt now explicitly estimates content-level spam resemblance and excludes campaign fit, geography, and factual review. It does not claim to predict Gmail routing; actual Gmail filters also consider sender authentication, reputation, recipient behavior, and other unavailable signals.
 - Rule-only risk tests: 11 passed. Frontend typecheck and Python compileall passed. The entire async risk test module stalled at the first mocked async AI call in this environment; rerun `python -m pytest tests/test_risk_service.py -q` locally.
+
+## Stage 7.1 — Instantly read-only account client
+- Verified from Instantly API v2 docs that connected sending accounts are listed with `GET https://api.instantly.ai/api/v2/accounts`, bearer authentication, `accounts:read`, a `limit` up to 100 and `next_starting_after` cursor pagination.
+- Added `backend/app/integrations/instantly_client.py` to list pages of connected accounts and return only the fields needed for review. It never sends email; it handles missing key, authentication/scope failure, plan access, timeout, rate limits, service errors, malformed responses and repeated cursors without logging keys or raw provider payloads.
+- Added fake-client coverage and an opt-in real read-only check in `backend/tests/test_instantly_client.py`. User reports the focused suite passed: 7 passed, 1 opt-in test skipped.
+- User ran the opt-in live test with the key stored in `backend/.env`: 1 passed; Instantly returned 6 connected sending accounts. This was a read-only API call and sent no email. No database, frontend or send behavior changed.
+
+## Security review — upload and workload hardening
+- Added backend upload limits: 15 MB maximum file size, 10,000 data rows, XLSX expanded-size/compression-ratio/component-count checks, and XLSX workbook structure validation. CSV parsing now stops at the row cap instead of first loading an unbounded number of rows.
+- Existing-lead lookups and accepted-lead inserts now use bounded chunks (300 lookups / 500 inserts); incomplete insert batches trigger cleanup. Email validation is restricted to a safe conventional format before values are placed in database filters.
+- OpenRouter personalization concurrency is shared across runs in each API process, and lead-field content is explicitly treated as untrusted data in the personalization prompt. Database uniqueness prevents two active runs for the same campaign/batch pair.
+- Added migration `011_security_hardening.sql` to enable deny-by-default RLS on application tables, revoke browser-role grants, and add the active-run uniqueness constraint. Apply this migration in Supabase SQL Editor before relying on the database protections.
+- Added response security headers and disabled HTTP caching for API responses containing workspace data. The source upload is not retained as an object, so a public CDN is not appropriate; private storage is only needed if we later retain source files or move uploads to direct-to-storage ingestion.
+- Verification: Python `compileall` and frontend `npm run typecheck` passed. `npm run build` failed in the existing Turbopack CSS worker startup (`creating new process`, child Node exited with code 0); this matches the previously recorded environment failure. Automated tests were not run in this review. `npm audit` could not reach `registry.npmjs.org` in the earlier review, so dependency vulnerability status remains unverified. The subsequent PGMQ entry below records the durable worker change.
+
+## Durable personalization queue — PGMQ
+- Added migration `012_durable_personalization_queue.sql`: creates a logged PGMQ queue and an insert trigger that enqueues each campaign run in the same database transaction. Queue functions are wrapped in service-role-only RPCs; workers lease messages, extend leases during long runs, archive completed jobs, and retry fatal runs up to three deliveries.
+- Replaced request-scoped FastAPI background execution with a lifespan worker that drains PGMQ after startup. If the API stops mid-run, the queue message becomes visible after its lease expires; the restarted worker resumes it.
+- Personalization now checks saved lead/step pairs by bounded lead chunk before calling OpenRouter and uses conflict-ignore inserts, preventing duplicate personalized rows and avoiding repeat AI calls after interrupted runs.
+- Updated Stage 5 planning notes. Apply migration `011_security_hardening.sql` first, then `012_durable_personalization_queue.sql` in Supabase SQL Editor. The queue worker only runs when the API starts with database settings configured. It does not send email.
+- Automated tests were not run. Re-run Python compile checks, focused campaign-run/personalization tests, and the frontend build in the local Windows environment before relying on this queue migration.
+
+## Personalization run failure visibility fix
+- Fixed the queue worker retrying every failed run as though it were a temporary OpenRouter rate limit. That behavior cleared progress and error details, which could leave a permanent setup/database failure looking like `running` with zero processed leads.
+- The worker now retries only the explicit OpenRouter rate-limit outcome. Other failed runs keep their failure status/details and their queue message is archived. Added focused tests for both permanent failure and retryable rate-limit paths.
+- Apply no database migration. Restart the backend so the worker loads this code; an already leased PGMQ job will be picked up again when its visibility delay expires.
+
+## Local Docker backend setup
+- Added a production-style Python 3.14 backend Dockerfile, Docker build exclusions for `.env` and development files, and a Compose service. Compose keeps the API bound to `127.0.0.1:8001` and explicitly enforces `SEND_MODE=test`.
+- Docker Desktop was launched. The backend image built and container `pocketperks-backend-1` started as healthy. Its `/api/health` returned backend `ok`, database `connected`, and send mode `test`. Host port 8000 was already occupied, so Docker is published at `127.0.0.1:8001`. No OS group or Docker permissions were changed.

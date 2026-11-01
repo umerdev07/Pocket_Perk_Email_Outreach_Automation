@@ -10,7 +10,7 @@ from app.campaign_runs_db import get_campaign_run, start_campaign_run
 from app.main import create_app
 from app.personalization_db import get_run_lead_personalized_emails, get_run_personalized_emails
 
-client = TestClient(create_app())
+client = TestClient(create_app(auth_enabled=False))
 
 
 class FakeResponse:

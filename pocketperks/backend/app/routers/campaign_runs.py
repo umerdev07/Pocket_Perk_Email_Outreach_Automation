@@ -1,6 +1,6 @@
 from uuid import UUID
 
-from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
 
 from app.campaign_runs_db import get_campaign_run, start_campaign_run
@@ -17,10 +17,17 @@ class StartCampaignRequest(BaseModel):
 
 
 @router.post("/{campaign_id}/start")
-async def start_campaign(campaign_id: UUID, payload: StartCampaignRequest, background_tasks: BackgroundTasks,
+async def start_campaign(campaign_id: UUID, payload: StartCampaignRequest, request: Request,
+                         background_tasks: BackgroundTasks,
                          settings: Settings = Depends(get_settings)):
+    # The campaign_runs insert trigger enqueues this run transactionally in PGMQ.
+    # The lifespan worker consumes it; closing this request or restarting the API
+    # does not discard the queued job.
     result = await start_campaign_run(settings, str(campaign_id), str(payload.batch_id))
-    background_tasks.add_task(process_campaign_run, settings, result["run_id"])
+    # The factory's worker-disabled mode is reserved for isolated tests/local
+    # embedding. The normal module app enables the durable PGMQ worker.
+    if not request.app.state.queue_worker_enabled:
+        background_tasks.add_task(process_campaign_run, settings, result["run_id"])
     return result
 
 

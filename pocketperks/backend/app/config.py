@@ -9,6 +9,7 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
     supabase_url: str = ""
+    supabase_anon_key: str = ""
     supabase_service_key: str = ""
     openrouter_api_key: str = ""
     openrouter_model: str = ""
@@ -16,7 +17,7 @@ class Settings(BaseSettings):
     send_mode: Literal["test", "live"] = "test"
     frontend_origin: str = "http://localhost:3000"
     # Keep provider load bounded; tune these only within the OpenRouter model's limits.
-    personalization_concurrency: int = Field(default=3, ge=1, le=10)
+    personalization_concurrency: int = Field(default=1, ge=1, le=10)
     personalization_batch_size: int = Field(default=25, ge=1, le=250)
 
 

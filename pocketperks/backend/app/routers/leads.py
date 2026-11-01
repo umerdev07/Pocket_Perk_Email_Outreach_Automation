@@ -1,6 +1,7 @@
 import csv
 import io
 import re
+import zipfile
 from urllib.parse import urlparse
 from uuid import UUID
 
@@ -18,7 +19,14 @@ REQUIRED_HEADERS = [
     "Website URL", "City", "Full address", "Email source URL",
     "Email verification result", "Verification tool", "Quality flags",
 ]
-EMAIL_RE = re.compile(r"^[^\s@]+@[^\s@]+\.[^\s@]+$")
+EMAIL_RE = re.compile(r"^[a-z0-9._%+-]+@[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$", re.I)
+MAX_UPLOAD_BYTES = 15 * 1024 * 1024
+MAX_IMPORT_ROWS = 10_000
+MAX_XLSX_UNCOMPRESSED_BYTES = 60 * 1024 * 1024
+MAX_XLSX_COMPRESSION_RATIO = 100
+MAX_XLSX_ENTRIES = 10_000
+DB_INSERT_CHUNK_SIZE = 500
+DB_LOOKUP_CHUNK_SIZE = 300
 FIELD_KEYS = ("business_name", "business_category", "email", "phone", "website", "city", "full_address",
               "email_source_url", "verification_result", "verification_tool", "quality_flags")
 
@@ -103,15 +111,18 @@ async def _existing_values(settings: Settings, emails: set[str], domains: set[st
     found_domains: set[str] = set()
     async with httpx.AsyncClient(timeout=10) as client:
         for column, values, destination in (("email", emails, found_emails), ("domain", domains, found_domains)):
-            if not values:
-                continue
-            response = await client.get(
-                f"{settings.supabase_url.rstrip('/')}/rest/v1/leads",
-                params={"select": column, column: f"in.({','.join(values)})"}, headers=headers,
-            )
-            if not response.is_success:
-                raise HTTPException(status_code=503, detail="Could not check existing leads in the database.")
-            destination.update(str(row[column]).lower() for row in response.json() if row.get(column))
+            ordered_values = sorted(values)
+            for offset in range(0, len(ordered_values), DB_LOOKUP_CHUNK_SIZE):
+                chunk = ordered_values[offset:offset + DB_LOOKUP_CHUNK_SIZE]
+                if not chunk:
+                    continue
+                response = await client.get(
+                    f"{settings.supabase_url.rstrip('/')}/rest/v1/leads",
+                    params={"select": column, column: f"in.({','.join(chunk)})"}, headers=headers,
+                )
+                if not response.is_success:
+                    raise HTTPException(status_code=503, detail="Could not check existing leads in the database.")
+                destination.update(str(row[column]).lower() for row in response.json() if row.get(column))
     return found_emails, found_domains
 
 
@@ -136,30 +147,73 @@ async def persist_import(settings: Settings, file_name: str, rows: list[dict], c
         batch_id = response.json()[0]["id"]
         accepted = [{k: v for k, v in row.items() if k not in ("status", "row")} | {"batch_id": batch_id}
                     for row in rows if row["status"] == "imported"]
-        if accepted:
-            inserted = await client.post(f"{base}/leads", headers=headers, json=accepted)
+        for offset in range(0, len(accepted), DB_INSERT_CHUNK_SIZE):
+            inserted = await client.post(f"{base}/leads", headers=headers,
+                                         json=accepted[offset:offset + DB_INSERT_CHUNK_SIZE])
             if not inserted.is_success:
-                raise HTTPException(status_code=503, detail="Batch was created, but lead rows could not be saved.")
+                # Keep the history/counts truthful if a chunk insert failed.
+                rollback = await client.post(f"{base}/rpc/delete_lead_batch_and_related_data", headers=headers,
+                                             json={"target_batch_id": batch_id})
+                try:
+                    rollback_data = rollback.json() if rollback.is_success else None
+                except ValueError:
+                    rollback_data = None
+                if isinstance(rollback_data, list):
+                    rollback_data = rollback_data[0] if rollback_data else None
+                if not isinstance(rollback_data, dict) or rollback_data.get("deleted") is not True:
+                    raise HTTPException(status_code=503,
+                                        detail="Lead import only partially saved and cleanup could not be confirmed. Contact an admin before retrying.")
+                raise HTTPException(status_code=503, detail="Lead rows could not be saved; the incomplete batch was removed.")
     return batch_id
 
 
 def _parse_csv(content: bytes) -> tuple[list[str] | None, list[list[object]]]:
     text = content.decode("utf-8-sig")
     reader = csv.reader(io.StringIO(text))
-    values = list(reader)
-    if not values:
+    headers = next(reader, None)
+    if headers is None:
         return None, []
-    return values[0], values[1:]
+    rows = []
+    for row in reader:
+        if len(rows) >= MAX_IMPORT_ROWS:
+            raise HTTPException(status_code=413, detail=f"A file can contain at most {MAX_IMPORT_ROWS:,} data rows.")
+        rows.append(row)
+    return headers, rows
 
 
 def _parse_xlsx(content: bytes) -> tuple[list[str] | None, list[list[object]]]:
+    try:
+        with zipfile.ZipFile(io.BytesIO(content)) as archive:
+            members = archive.infolist()
+            if len(members) > MAX_XLSX_ENTRIES:
+                raise HTTPException(status_code=400, detail="The Excel file contains too many internal components.")
+            names = {member.filename for member in members}
+            if "[Content_Types].xml" not in names or "xl/workbook.xml" not in names:
+                raise HTTPException(status_code=400, detail="The uploaded file is not a valid XLSX workbook.")
+            expanded_size = sum(member.file_size for member in members)
+            compressed_size = max(1, sum(member.compress_size for member in members))
+            if expanded_size > MAX_XLSX_UNCOMPRESSED_BYTES:
+                raise HTTPException(status_code=413, detail="The expanded Excel file is too large to process safely.")
+            if expanded_size / compressed_size > MAX_XLSX_COMPRESSION_RATIO:
+                raise HTTPException(status_code=400, detail="The Excel file has an unsafe compression ratio.")
+    except zipfile.BadZipFile as exc:
+        raise HTTPException(status_code=400, detail="The uploaded file is not a valid XLSX workbook.") from exc
+
     workbook = load_workbook(io.BytesIO(content), read_only=True, data_only=True)
-    sheet = workbook.worksheets[0] if workbook.worksheets else None
-    values = list(sheet.iter_rows(values_only=True)) if sheet else []
-    workbook.close()
-    if not values:
-        return None, []
-    return ["" if value is None else str(value).strip() for value in values[0]], [list(row) for row in values[1:]]
+    try:
+        sheet = workbook.worksheets[0] if workbook.worksheets else None
+        if sheet is None:
+            return None, []
+        values = []
+        for row in sheet.iter_rows(values_only=True, max_col=len(REQUIRED_HEADERS)):
+            if len(values) >= MAX_IMPORT_ROWS + 2:
+                raise HTTPException(status_code=413, detail=f"A file can contain at most {MAX_IMPORT_ROWS:,} data rows.")
+            values.append(list(row))
+        if not values:
+            return None, []
+        return ["" if value is None else str(value).strip() for value in values[0]], values[1:]
+    finally:
+        workbook.close()
 
 
 def _validate_and_map(headers: list[str] | None, source_rows: list[list[object]]) -> list[dict]:
@@ -189,7 +243,12 @@ async def import_leads(file: UploadFile = File(...), settings: Settings = Depend
     if extension not in {"csv", "xlsx"}:
         raise HTTPException(status_code=415, detail="Upload a .csv or .xlsx file.")
     try:
-        content = await file.read()
+        content = bytearray()
+        while chunk := await file.read(1024 * 1024):
+            content.extend(chunk)
+            if len(content) > MAX_UPLOAD_BYTES:
+                raise HTTPException(status_code=413, detail="Upload is too large. Maximum file size is 15 MB.")
+        content = bytes(content)
         if not content:
             raise HTTPException(status_code=400, detail="The uploaded file is empty.")
         headers, source_rows = _parse_csv(content) if extension == "csv" else _parse_xlsx(content)

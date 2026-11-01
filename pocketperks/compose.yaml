@@ -1,0 +1,15 @@
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    env_file:
+      - ./backend/.env
+    environment:
+      PORT: "8000"
+      FRONTEND_ORIGIN: "http://localhost:3000"
+      SEND_MODE: "test"
+    ports:
+      - "127.0.0.1:8001:8000"
+    init: true
+    restart: unless-stopped

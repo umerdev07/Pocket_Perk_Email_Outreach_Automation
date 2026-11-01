@@ -5,7 +5,7 @@ from fastapi.testclient import TestClient
 
 from app.main import create_app
 
-client = TestClient(create_app())
+client = TestClient(create_app(auth_enabled=False))
 
 
 def review_context(status="pending_review"):
