@@ -85,6 +85,33 @@ export async function setNewPassword(accessToken: string, password: string): Pro
   }
 }
 
+export async function requestEmailChange(email: string): Promise<void> {
+  const session = await currentSession();
+  if (!session) throw new Error("Please sign in again before changing your email.");
+
+  const { url, key } = authConfig();
+  let response: Response;
+  try {
+    response = await fetch(`${url}/auth/v1/user`, {
+      method: "PUT",
+      headers: {
+        "Content-Type": "application/json",
+        apikey: key,
+        Authorization: `Bearer ${session.access_token}`,
+      },
+      body: JSON.stringify({ email }),
+    });
+  } catch {
+    throw new Error("Could not connect to Supabase Auth. Check the project URL and internet connection.");
+  }
+
+  if (!response.ok) {
+    const data = await response.json().catch(() => ({}));
+    const message = typeof data.msg === "string" ? data.msg : typeof data.message === "string" ? data.message : "Could not request this email change.";
+    throw new Error(message);
+  }
+}
+
 async function refreshSession(existing: AuthSession): Promise<AuthSession | null> {
   if (!refreshInProgress) {
     refreshInProgress = authRequest("token?grant_type=refresh_token", { refresh_token: existing.refresh_token })

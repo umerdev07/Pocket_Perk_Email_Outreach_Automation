@@ -7,7 +7,7 @@ services:
       - ./backend/.env
     environment:
       PORT: "8000"
-      FRONTEND_ORIGIN: "http://localhost:3000"
+      FRONTEND_ORIGIN: "https://pocketperk-stamp.netlify.app"
       SEND_MODE: "test"
     ports:
       - "127.0.0.1:8001:8000"
