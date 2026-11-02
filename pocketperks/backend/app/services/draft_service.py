@@ -2,7 +2,7 @@
 import json
 
 from app.config import Settings
-from app.drafts_db import load_campaign, upsert_step_draft, get_draft_context
+from app.drafts_db import load_campaign, upsert_step_draft, get_draft_context, set_generation_state, demote_campaign
 from app.integrations.openrouter_client import (
     BadResponseError, MissingAPIKeyError, MissingModelError, OpenRouterError,
     OpenRouterTimeoutError, RateLimitedError, chat_completion_json,
@@ -85,4 +85,22 @@ async def regenerate_draft(settings: Settings, draft_id: str) -> dict | None:
     payload = await chat_completion_json(_prompt(campaign, step, previous), settings)
     if not isinstance(payload, dict) or not isinstance(payload.get("subject"), str) or not isinstance(payload.get("body"), str):
         raise ValueError("Model response must contain subject and body strings.")
-    return await upsert_step_draft(settings, draft["step_id"], payload["subject"].strip(), payload["body"].strip())
+    saved = await upsert_step_draft(settings, draft["step_id"], payload["subject"].strip(), payload["body"].strip())
+    if campaign.get("status") == "approved":
+        await demote_campaign(settings, campaign.get("id") or step.get("campaign_id"))
+    return saved
+
+
+async def run_regeneration_job(settings: Settings, draft_id: str) -> None:
+    """Run regeneration after returning HTTP 202; persist safe failure state for polling."""
+    try:
+        result = await regenerate_draft(settings, draft_id)
+        if result is None:
+            return
+    except Exception as exc:
+        _category, safe_detail = _safe_failure(exc)
+        try:
+            await set_generation_state(settings, draft_id, "failed", safe_detail)
+        except Exception:
+            # Do not leak provider/database details into background-task logs.
+            pass

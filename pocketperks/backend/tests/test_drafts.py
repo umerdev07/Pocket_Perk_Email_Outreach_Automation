@@ -53,9 +53,24 @@ def test_approve_sets_approved_status_and_can_approve_campaign():
     approve.assert_awaited_once()
 
 
-def test_regenerate_replaces_draft_via_service():
-    renewed = {"id": "draft-1", "status": "generated", "subject": "Fresh"}
-    with patch("app.routers.drafts.regenerate_draft", new=AsyncMock(return_value=renewed)):
+def test_regenerate_returns_accepted_and_schedules_background_job():
+    context = {"id": "draft-1", "generation_status": "idle"}
+    with patch("app.routers.drafts.get_draft_context", new=AsyncMock(return_value=context)), \
+         patch("app.routers.drafts.set_generation_state", new=AsyncMock(return_value={"generation_status": "generating"})) as set_state, \
+         patch("app.routers.drafts.run_regeneration_job", new=AsyncMock()) as job:
         response = TestClient(create_app(auth_enabled=False)).post("/api/drafts/draft-1/regenerate")
-    assert response.status_code == 200
-    assert response.json()["status"] == "generated"
+    assert response.status_code == 202
+    assert response.json() == {"id": "draft-1", "generation_status": "generating"}
+    assert set_state.await_args.args[1:] == ("draft-1", "generating")
+    job.assert_awaited_once()
+
+
+def test_regenerate_does_not_queue_duplicate_while_generating():
+    with patch("app.routers.drafts.get_draft_context", new=AsyncMock(return_value={"generation_status": "generating"})), \
+         patch("app.routers.drafts.set_generation_state", new=AsyncMock()) as set_state, \
+         patch("app.routers.drafts.run_regeneration_job", new=AsyncMock()) as job:
+        response = TestClient(create_app(auth_enabled=False)).post("/api/drafts/draft-1/regenerate")
+    assert response.status_code == 202
+    assert response.json()["generation_status"] == "generating"
+    set_state.assert_not_awaited()
+    job.assert_not_awaited()

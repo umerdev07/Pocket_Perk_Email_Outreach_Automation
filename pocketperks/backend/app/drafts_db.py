@@ -24,7 +24,7 @@ def _headers(settings: Settings, prefer: str | None = None) -> dict:
 async def load_campaign(settings: Settings, campaign_id: str) -> dict | None:
     async with httpx.AsyncClient(timeout=15) as client:
         response = await client.get(f"{_base(settings)}/campaigns", params={
-            "select": "id,name,instructions,status,campaign_steps(id,step_number,context,generic_drafts(id,subject,body,status))",
+            "select": "id,name,instructions,status,campaign_steps(id,step_number,context,generic_drafts(id,subject,body,status,generation_status,generation_error))",
             "id": f"eq.{campaign_id}", "limit": "1",
         }, headers=_headers(settings))
     if not response.is_success:
@@ -37,7 +37,8 @@ async def upsert_step_draft(settings: Settings, step_id: str, subject: str, body
     async with httpx.AsyncClient(timeout=15) as client:
         response = await client.post(f"{_base(settings)}/generic_drafts", params={"on_conflict": "step_id"},
             headers=_headers(settings, "resolution=merge-duplicates,return=representation"),
-            json={"step_id": step_id, "subject": subject, "body": body, "status": "generated", "approved_at": None})
+            json={"step_id": step_id, "subject": subject, "body": body, "status": "generated", "approved_at": None,
+                  "generation_status": "succeeded", "generation_error": None, "generation_finished_at": datetime.now(UTC).isoformat()})
     if not response.is_success or not response.json():
         raise HTTPException(status_code=503, detail="Could not save the generated draft.")
     return response.json()[0]
@@ -46,13 +47,37 @@ async def upsert_step_draft(settings: Settings, step_id: str, subject: str, body
 async def get_draft_context(settings: Settings, draft_id: str) -> dict | None:
     async with httpx.AsyncClient(timeout=15) as client:
         response = await client.get(f"{_base(settings)}/generic_drafts", params={
-            "select": "id,step_id,subject,body,status,campaign_steps(id,campaign_id,step_number,context,campaigns(id,name,instructions,status))",
+            "select": "id,step_id,subject,body,status,generation_status,generation_error,campaign_steps(id,campaign_id,step_number,context,campaigns(id,name,instructions,status))",
             "id": f"eq.{draft_id}", "limit": "1",
         }, headers=_headers(settings))
     if not response.is_success:
         raise HTTPException(status_code=503, detail="Could not load the draft.")
     rows = response.json()
     return rows[0] if rows else None
+
+
+async def set_generation_state(settings: Settings, draft_id: str, state: str, error: str | None = None) -> dict:
+    """Persist asynchronous regeneration state for the review page to poll."""
+    payload = {"generation_status": state, "generation_error": error}
+    if state == "generating":
+        payload["generation_started_at"] = datetime.now(UTC).isoformat()
+        payload["generation_finished_at"] = None
+    if state in {"succeeded", "failed"}:
+        payload["generation_finished_at"] = datetime.now(UTC).isoformat()
+    async with httpx.AsyncClient(timeout=15) as client:
+        response = await client.patch(f"{_base(settings)}/generic_drafts", params={"id": f"eq.{draft_id}"},
+            headers=_headers(settings, "return=representation"), json=payload)
+    if not response.is_success or not response.json():
+        raise HTTPException(status_code=503, detail="Could not update draft generation status.")
+    return response.json()[0]
+
+
+async def demote_campaign(settings: Settings, campaign_id: str) -> None:
+    async with httpx.AsyncClient(timeout=15) as client:
+        response = await client.patch(f"{_base(settings)}/campaigns", params={"id": f"eq.{campaign_id}"},
+            headers=_headers(settings), json={"status": "draft"})
+    if not response.is_success:
+        raise HTTPException(status_code=503, detail="Could not update campaign approval status.")
 
 
 async def update_draft(settings: Settings, draft_id: str, subject: str, body: str) -> dict:

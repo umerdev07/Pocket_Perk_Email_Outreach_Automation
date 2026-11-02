@@ -42,7 +42,7 @@ async def list_campaigns(settings: Settings) -> list[dict]:
 async def get_campaign(settings: Settings, campaign_id: str) -> dict | None:
     async with httpx.AsyncClient(timeout=15) as client:
         response = await client.get(f"{_base(settings)}/campaigns", params={
-            "select": "id,name,total_emails,start_date,end_date,instructions,status,created_at,campaign_steps(id,step_number,context,delay_days,generic_drafts(id,subject,body,status,approved_at))",
+            "select": "id,name,total_emails,start_date,end_date,instructions,status,created_at,campaign_steps(id,step_number,context,delay_days,generic_drafts(id,subject,body,status,approved_at,generation_status,generation_error,generation_started_at,generation_finished_at))",
             "id": f"eq.{campaign_id}", "limit": "1",
         }, headers=_headers(settings))
     if not response.is_success:

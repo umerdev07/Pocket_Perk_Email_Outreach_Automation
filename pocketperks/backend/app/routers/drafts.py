@@ -1,9 +1,9 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, BackgroundTasks, Depends, HTTPException
 from pydantic import BaseModel, Field
 
 from app.config import Settings, get_settings
-from app.drafts_db import approve_draft, update_draft
-from app.services.draft_service import generate_campaign_drafts, regenerate_draft
+from app.drafts_db import approve_draft, update_draft, get_draft_context, set_generation_state, demote_campaign
+from app.services.draft_service import generate_campaign_drafts, run_regeneration_job
 
 router = APIRouter(tags=["drafts"])
 
@@ -26,12 +26,20 @@ async def edit(draft_id: str, payload: DraftEdit, settings: Settings = Depends(g
     return await update_draft(settings, draft_id, payload.subject.strip(), payload.body.strip())
 
 
-@router.post("/api/drafts/{draft_id}/regenerate")
-async def regenerate(draft_id: str, settings: Settings = Depends(get_settings)):
-    result = await regenerate_draft(settings, draft_id)
-    if result is None:
+@router.post("/api/drafts/{draft_id}/regenerate", status_code=202)
+async def regenerate(draft_id: str, background_tasks: BackgroundTasks, settings: Settings = Depends(get_settings)):
+    draft = await get_draft_context(settings, draft_id)
+    if draft is None:
         raise HTTPException(status_code=404, detail="Draft not found.")
-    return result
+    if draft.get("generation_status") == "generating":
+        return {"id": draft_id, "generation_status": "generating"}
+    step = draft.get("campaign_steps") or {}
+    campaign = step.get("campaigns") or {}
+    if campaign.get("status") == "approved":
+        await demote_campaign(settings, campaign.get("id") or step.get("campaign_id"))
+    await set_generation_state(settings, draft_id, "generating")
+    background_tasks.add_task(run_regeneration_job, settings, draft_id)
+    return {"id": draft_id, "generation_status": "generating"}
 
 
 @router.post("/api/drafts/{draft_id}/approve")
