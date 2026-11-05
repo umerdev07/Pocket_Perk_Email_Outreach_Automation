@@ -73,6 +73,8 @@ async def authenticate_request(request: Request, settings: Settings) -> dict[str
 
 
 def allowed_roles(path: str, method: str) -> set[str]:
+    if path.startswith("/api/suppressions"):
+        return {"admin"}
     if path == "/api/auth/me" or path.startswith("/api/dashboard/"):
         return {"admin", "operator", "reviewer"}
     if path == "/api/lead-replies" and method == "GET":

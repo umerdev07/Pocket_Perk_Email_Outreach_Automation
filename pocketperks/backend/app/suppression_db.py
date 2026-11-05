@@ -42,10 +42,11 @@ async def get_suppressed_emails(settings: Settings, emails: set[str] | list[str]
         for offset in range(0, len(normalized), _CHUNK_SIZE):
             chunk = normalized[offset:offset + _CHUNK_SIZE]
             response = await client.get(f"{_base(settings)}/email_suppressions", params={
-                "select": "email", "email": f"in.({','.join(chunk)})", "limit": str(len(chunk)),
+                "select": "email", "email": f"in.({','.join(chunk)})", "active": "eq.true",
+                "limit": str(len(chunk)),
             }, headers=_headers(settings))
             if not response.is_success:
-                raise HTTPException(status_code=503, detail="Could not check the email suppression list. Apply migration 019 and retry.")
+                raise HTTPException(status_code=503, detail="Could not check the email suppression list. Apply migration 020 and retry.")
             try:
                 rows = response.json()
             except (ValueError, TypeError) as exc:
@@ -57,7 +58,7 @@ async def get_suppressed_emails(settings: Settings, emails: set[str] | list[str]
 
 
 async def save_suppressions(settings: Settings, records: list[dict]) -> int:
-    """Insert opt-outs idempotently; the first captured reason/source is retained."""
+    """Record new opt-outs and reactivations atomically with audit events."""
     payload = []
     for record in records:
         email = normalize_email(record.get("email"))
@@ -70,6 +71,7 @@ async def save_suppressions(settings: Settings, records: list[dict]) -> int:
             "source": source,
             "lead_id": record.get("lead_id"),
             "campaign_id": record.get("campaign_id"),
+            "actor_user_id": record.get("actor_user_id"),
         })
     if not payload:
         return 0
@@ -77,16 +79,63 @@ async def save_suppressions(settings: Settings, records: list[dict]) -> int:
     async with httpx.AsyncClient(timeout=25) as client:
         for offset in range(0, len(payload), _CHUNK_SIZE):
             chunk = payload[offset:offset + _CHUNK_SIZE]
-            response = await client.post(f"{_base(settings)}/email_suppressions",
-                params={"on_conflict": "email"},
-                headers=_headers(settings, "resolution=ignore-duplicates,return=representation"), json=chunk)
+            response = await client.post(f"{_base(settings)}/rpc/record_email_suppressions",
+                headers=_headers(settings), json={"p_records": chunk})
             if not response.is_success:
-                raise HTTPException(status_code=503, detail="Could not save the email opt-out. Apply migration 019 and retry.")
+                raise HTTPException(status_code=503, detail="Could not save the email opt-out. Apply migration 020 and retry.")
             try:
-                rows = response.json()
+                inserted = response.json()
             except (ValueError, TypeError) as exc:
                 raise HTTPException(status_code=503, detail="Could not confirm the email opt-out was saved.") from exc
-            if not isinstance(rows, list):
+            if type(inserted) is not int or inserted < 0:
                 raise HTTPException(status_code=503, detail="Could not confirm the email opt-out was saved.")
-            saved += len(rows)
+            saved += inserted
     return saved
+
+
+async def list_suppression_management(settings: Settings, *, limit: int, offset: int) -> dict:
+    base = _base(settings)
+    async with httpx.AsyncClient(timeout=25) as client:
+        suppressions_response = await client.get(f"{base}/email_suppressions", params={
+            "select": "email,reason,source,lead_id,campaign_id,active,created_at,released_at,released_by,release_reason",
+            "order": "active.desc,created_at.desc", "limit": str(limit), "offset": str(offset),
+        }, headers=_headers(settings))
+        if not suppressions_response.is_success:
+            raise HTTPException(status_code=503, detail="Could not load suppression records. Apply migration 020 and retry.")
+        events_response = await client.get(f"{base}/email_suppression_events", params={
+            "select": "id,email,event_type,source,reason,actor_user_id,created_at",
+            "order": "created_at.desc", "limit": "100",
+        }, headers=_headers(settings))
+        if not events_response.is_success:
+            raise HTTPException(status_code=503, detail="Could not load suppression audit history. Apply migration 020 and retry.")
+        try:
+            suppressions, events = suppressions_response.json(), events_response.json()
+        except (ValueError, TypeError) as exc:
+            raise HTTPException(status_code=503, detail="Could not load suppression management data.") from exc
+    if not isinstance(suppressions, list) or not isinstance(events, list):
+        raise HTTPException(status_code=503, detail="Could not load suppression management data.")
+    return {"items": suppressions, "events": events}
+
+
+async def release_suppression(settings: Settings, email: str, reason: str, actor_user_id: str) -> dict:
+    normalized = normalize_email(email)
+    if not normalized:
+        raise HTTPException(status_code=422, detail="Enter a valid email address.")
+    reason = reason.strip()
+    if len(reason) < 10:
+        raise HTTPException(status_code=422, detail="Record why the recipient explicitly asked to resume emails.")
+    async with httpx.AsyncClient(timeout=20) as client:
+        response = await client.post(f"{_base(settings)}/rpc/release_email_suppression", headers=_headers(settings),
+                                     json={"target_email": normalized, "release_reason": reason[:300],
+                                           "actor_id": actor_user_id})
+    if response.status_code == 404:
+        raise HTTPException(status_code=404, detail="Suppression record not found.")
+    if not response.is_success:
+        raise HTTPException(status_code=503, detail="Could not release this suppression. Apply migration 020 and retry.")
+    try:
+        rows = response.json()
+    except (ValueError, TypeError) as exc:
+        raise HTTPException(status_code=503, detail="Could not confirm suppression release.") from exc
+    if not isinstance(rows, list) or not rows:
+        raise HTTPException(status_code=503, detail="Could not confirm suppression release.")
+    return rows[0]

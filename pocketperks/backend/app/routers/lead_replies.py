@@ -1,7 +1,7 @@
 """PocketPerks Lead Replies page API."""
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, Query, Request
 
 from app.config import Settings, get_settings
 from app.instantly_replies_service import sync_recent_replies
@@ -30,5 +30,5 @@ async def read_lead_reply(reply_id: UUID, settings: Settings = Depends(get_setti
 
 
 @router.post("/{reply_id}/opt-out")
-async def opt_out_lead_reply(reply_id: UUID, settings: Settings = Depends(get_settings)):
-    return await mark_reply_opt_out(settings, str(reply_id))
+async def opt_out_lead_reply(reply_id: UUID, request: Request, settings: Settings = Depends(get_settings)):
+    return await mark_reply_opt_out(settings, str(reply_id), request.state.workspace_user["id"])

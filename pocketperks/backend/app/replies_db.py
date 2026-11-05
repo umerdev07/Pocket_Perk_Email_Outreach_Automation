@@ -182,7 +182,7 @@ async def mark_reply_read(settings: Settings, reply_id: str) -> dict:
     return rows[0]
 
 
-async def mark_reply_opt_out(settings: Settings, reply_id: str) -> dict:
+async def mark_reply_opt_out(settings: Settings, reply_id: str, actor_user_id: str) -> dict:
     """Manually confirm an ambiguous reply as an opt-out and suppress globally."""
     async with httpx.AsyncClient(timeout=20) as client:
         response = await client.get(f"{_base(settings)}/replies", params={
@@ -199,6 +199,7 @@ async def mark_reply_opt_out(settings: Settings, reply_id: str) -> dict:
     await save_suppressions(settings, [{
         "email": email, "source": "reply_manual", "reason": "Opt-out confirmed by a workspace reviewer.",
         "lead_id": row.get("lead_id"), "campaign_id": row.get("campaign_id"),
+        "actor_user_id": actor_user_id,
     }])
     return {"reply_id": reply_id, "email": email, "opted_out": True}
 

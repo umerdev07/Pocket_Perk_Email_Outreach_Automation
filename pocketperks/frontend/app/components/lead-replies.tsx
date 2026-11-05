@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { apiFetch } from "../../lib/auth";
+import SuppressionManager from "./suppression-manager";
 
 type Reply = {
   id: string;
@@ -17,7 +18,7 @@ type Reply = {
   campaigns?: { name?: string } | null;
 };
 
-type Props = { apiBase: string };
+type Props = { apiBase: string; canManageSuppressions?: boolean };
 type ReadFilter = "all" | "unread" | "read";
 
 function splitQuotedMessage(body: string) {
@@ -30,7 +31,7 @@ function splitQuotedMessage(body: string) {
   return { reply: lines.slice(0, marker).join("\n").trim(), quoted: lines.slice(marker).join("\n").trim() };
 }
 
-export default function LeadReplies({ apiBase }: Props) {
+export default function LeadReplies({ apiBase, canManageSuppressions = false }: Props) {
   const [replies, setReplies] = useState<Reply[]>([]);
   const [hasMore, setHasMore] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -166,6 +167,7 @@ export default function LeadReplies({ apiBase }: Props) {
       </div>
       {error && <p role="alert" className="error">{error}</p>}
       {notice && <p role="status" className="success">{notice}</p>}
+      {canManageSuppressions && <SuppressionManager apiBase={apiBase}/>}
       <section className="card replies-card">
         <div className="replies-toolbar">
           <input aria-label="Search replies" value={search} onChange={event => setSearch(event.target.value)} placeholder="Search sender, business, campaign or reply" />
