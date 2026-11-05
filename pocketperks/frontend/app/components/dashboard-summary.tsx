@@ -11,12 +11,16 @@ type Summary = {
   pending_approvals: number;
   queued_not_sent: number;
   active_runs: number;
+  total_replies: number;
+  unread_replies: number;
+  instantly_campaigns: number;
+  instantly_leads_synced: number;
 };
 
 type Props = {
   apiBase: string;
   refreshKey: number;
-  onNavigate: (page: "Campaigns" | "Human Approval") => void;
+  onNavigate: (page: "Campaigns" | "Human Approval" | "Lead Replies") => void;
 };
 
 export default function DashboardSummary({ apiBase, refreshKey, onNavigate }: Props) {
@@ -39,7 +43,11 @@ export default function DashboardSummary({ apiBase, refreshKey, onNavigate }: Pr
     }
   }, [apiBase]);
 
-  useEffect(() => { void loadSummary(); }, [loadSummary, refreshKey]);
+  useEffect(() => {
+    void loadSummary();
+    const timer = window.setInterval(() => void loadSummary(), 60_000);
+    return () => window.clearInterval(timer);
+  }, [loadSummary, refreshKey]);
 
   const cards = summary ? [
     { label: "Total leads", value: summary.total_leads, hint: "Imported and available", tone: "violet" },
@@ -47,6 +55,9 @@ export default function DashboardSummary({ apiBase, refreshKey, onNavigate }: Pr
     { label: "Needs approval", value: summary.pending_approvals, hint: "Human review required", tone: "amber" },
     { label: "Queued · not sent", value: summary.queued_not_sent, hint: "Ready for sending setup", tone: "green" },
     { label: "Personalization runs", value: summary.active_runs, hint: "Currently processing", tone: "blue" },
+    { label: "Instantly drafts", value: summary.instantly_campaigns, hint: "Synced; launch remains manual", tone: "violet" },
+    { label: "Leads synced to Instantly", value: summary.instantly_leads_synced, hint: "Provider lead records", tone: "green" },
+    { label: "Lead replies", value: summary.total_replies, hint: `${summary.unread_replies} unread in PocketPerks`, tone: "amber" },
   ] : [];
 
   return (
@@ -70,6 +81,7 @@ export default function DashboardSummary({ apiBase, refreshKey, onNavigate }: Pr
       <div className="dashboard-links">
         <button type="button" onClick={() => onNavigate("Campaigns")}>Campaigns →</button>
         <button type="button" onClick={() => onNavigate("Human Approval")}>Human Approval →</button>
+        <button type="button" onClick={() => onNavigate("Lead Replies")}>Lead Replies →</button>
       </div>
     </section>
   );

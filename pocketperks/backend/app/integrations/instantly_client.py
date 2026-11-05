@@ -17,6 +17,7 @@ from app.config import Settings, get_settings
 
 ACCOUNTS_URL = "https://api.instantly.ai/api/v2/accounts"
 CAMPAIGNS_URL = "https://api.instantly.ai/api/v2/campaigns"
+EMAILS_URL = "https://api.instantly.ai/api/v2/emails"
 ADD_LEADS_URL = "https://api.instantly.ai/api/v2/leads/add"
 PAGE_SIZE = 100
 MAX_LEADS_PER_REQUEST = 1000
@@ -139,6 +140,56 @@ async def list_sending_accounts(settings: Settings | None = None) -> list[dict[s
             if cursor in seen_cursors:
                 raise BadResponseError("Instantly repeated an account pagination cursor.")
             seen_cursors.add(cursor)
+
+
+async def list_received_emails(*, settings: Settings | None = None, limit: int = 100,
+                               cursor: str | None = None,
+                               min_timestamp_created: str | None = None) -> dict[str, Any]:
+    """Read one bounded page of received Instantly Unibox messages only."""
+    config = settings or get_settings()
+    headers = _write_headers(config)
+    if type(limit) is not int or not 1 <= limit <= 100:
+        raise ValueError("Email page size must be between 1 and 100.")
+    params: dict[str, Any] = {"limit": limit, "email_type": "received", "sort_order": "desc"}
+    if cursor:
+        params["starting_after"] = cursor
+    if min_timestamp_created:
+        params["min_timestamp_created"] = min_timestamp_created
+    for attempt in range(MAX_RETRIES + 1):
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as session:
+                response = await session.get(EMAILS_URL, headers=headers, params=params)
+        except httpx.TimeoutException as exc:
+            raise InstantlyTimeoutError("Instantly reply sync timed out.") from exc
+        except httpx.HTTPError as exc:
+            raise InstantlyRequestError("Could not communicate with Instantly reply inbox.") from exc
+        if response.status_code == 429 or 500 <= response.status_code <= 599:
+            if attempt < MAX_RETRIES:
+                await asyncio.sleep(RETRY_BASE_SECONDS * (2 ** attempt))
+                continue
+            if response.status_code == 429:
+                raise RateLimitedError("Instantly reply sync rate limit persisted after retries.")
+            raise InstantlyRequestError("Instantly reply inbox service error persisted after retries.")
+        if response.status_code in (401, 403):
+            raise AuthenticationError("Instantly rejected the API key or its emails:read permission.")
+        if response.status_code == 402:
+            raise PlanAccessError("The Instantly workspace plan does not allow reading inbox emails.")
+        if not response.is_success:
+            raise InstantlyRequestError(f"Instantly returned HTTP {response.status_code} for inbox replies.")
+        try:
+            payload = response.json()
+        except (ValueError, TypeError) as exc:
+            raise BadResponseError("Instantly returned invalid JSON for inbox replies.") from exc
+        if not isinstance(payload, dict) or not isinstance(payload.get("items"), list):
+            raise BadResponseError("Instantly returned an unexpected inbox reply list.")
+        items = payload["items"]
+        if any(not isinstance(item, dict) for item in items):
+            raise BadResponseError("Instantly returned an invalid inbox reply entry.")
+        next_cursor = payload.get("next_starting_after")
+        if next_cursor is not None and not isinstance(next_cursor, str):
+            raise BadResponseError("Instantly returned an invalid inbox pagination cursor.")
+        return {"items": items, "next_starting_after": next_cursor}
+    raise InstantlyRequestError("Instantly reply sync failed.")
 
 
 def _write_headers(settings: Settings) -> dict[str, str]:

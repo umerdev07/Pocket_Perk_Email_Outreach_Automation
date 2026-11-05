@@ -17,8 +17,10 @@ from app.routers.drafts import router as drafts_router
 from app.routers.campaign_runs import router as campaign_runs_router, runs_router
 from app.routers.approvals import router as approvals_router
 from app.routers.dashboard import router as dashboard_router
+from app.routers.lead_replies import router as lead_replies_router
 from app.services.campaign_queue_worker import run_campaign_queue_worker
 from app.services.instantly_sync_worker import run_instantly_sync_worker
+from app.services.instantly_replies_worker import run_instantly_replies_worker
 
 
 def create_app(*, auth_enabled: bool = True, queue_worker_enabled: bool = False) -> FastAPI:
@@ -32,6 +34,9 @@ def create_app(*, auth_enabled: bool = True, queue_worker_enabled: bool = False)
                 run_campaign_queue_worker(settings), name="pocketperks-personalization-worker"))
             worker_tasks.append(asyncio.create_task(
                 run_instantly_sync_worker(settings), name="pocketperks-instantly-sync-worker"))
+            if settings.instantly_api_key:
+                worker_tasks.append(asyncio.create_task(
+                    run_instantly_replies_worker(settings), name="pocketperks-instantly-replies-worker"))
         yield
         for worker_task in worker_tasks:
             worker_task.cancel()
@@ -48,6 +53,7 @@ def create_app(*, auth_enabled: bool = True, queue_worker_enabled: bool = False)
     app.include_router(runs_router)
     app.include_router(approvals_router)
     app.include_router(dashboard_router)
+    app.include_router(lead_replies_router)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=[settings.frontend_origin],
