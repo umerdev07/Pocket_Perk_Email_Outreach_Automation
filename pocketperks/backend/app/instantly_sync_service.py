@@ -133,9 +133,17 @@ async def sync_completed_run(settings: Settings, run_id: str) -> dict[str, int |
                                          delay_hours=settings.instantly_followup_delay_hours)
         try:
             created = await create_campaign(payload, settings)
-        except (InstantlyTimeoutError, InstantlyWriteError, BadResponseError):
+        except (InstantlyTimeoutError, InstantlyWriteError, BadResponseError) as exc:
+            # Keep a safe provider diagnostic so an operator can distinguish a
+            # rejected request (for example HTTP 400) from an ambiguous write.
+            # The client exception never includes raw provider response bodies,
+            # credentials, or lead/email content.
+            if isinstance(exc, InstantlyWriteError) and not exc.outcome_unknown:
+                detail = str(exc)[:240]
+            else:
+                detail = f"{str(exc)} Reconcile Instantly before retrying."[:240]
             await update_campaign_mapping(settings, mapping["id"], {
-                "status": "failed", "error_detail": "Campaign creation outcome is unknown; reconcile Instantly before retrying.",
+                "status": "failed", "error_detail": detail,
             })
             raise
         provider_campaign_id = created["id"]
