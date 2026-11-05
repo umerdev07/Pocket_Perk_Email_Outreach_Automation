@@ -15,7 +15,7 @@ from app.integrations.instantly_client import (BadResponseError, InstantlyTimeou
                                                InstantlyWriteError, add_campaign_leads,
                                                create_campaign)
 
-INSTANTLY_SCHEDULE_TIMEZONE = "Etc/GMT-5"  # Instantly's accepted Etc/GMT form for Pakistan UTC+5.
+INSTANTLY_SCHEDULE_TIMEZONE = "Asia/Karachi"
 
 
 def build_campaign_payload(campaign: dict[str, Any], steps: list[dict[str, Any]], *,
