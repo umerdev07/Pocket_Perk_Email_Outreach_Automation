@@ -16,6 +16,7 @@ from app.personalization_db import (
     update_run_progress,
 )
 from app.services.risk_service import assess_personalized_email
+from app.suppression_db import get_suppressed_emails
 
 
 # Bound provider calls across all runs served by this API process, rather than
@@ -90,12 +91,16 @@ async def _process_lead(settings: Settings, run_id: str, campaign: dict, steps: 
                 subject, body = result.get("subject"), result.get("body")
                 if not isinstance(subject, str) or not subject.strip() or not isinstance(body, str) or not body.strip():
                     raise ValueError("Generated subject and body must be non-empty strings.")
+                body_text = body.strip()
+                opt_out_line = "To stop future PocketPerks emails, reply STOP."
+                if "reply stop" not in body_text.lower() and "unsubscribe" not in body_text.lower():
+                    body_text = f"{body_text}\n\n{opt_out_line}"
                 draft = {"subject": step["draft"]["subject"], "body": step["draft"]["body"]}
-                risk = await assess_personalized_email(subject.strip(), body.strip(), draft=draft, lead=lead,
+                risk = await assess_personalized_email(subject.strip(), body_text, draft=draft, lead=lead,
                                                        settings=settings, campaign=campaign, step=step)
                 await save_personalized_email(settings, {
                     "run_id": run_id, "lead_id": lead["id"], "campaign_id": campaign["id"],
-                    "step_id": step["id"], "subject": subject.strip(), "body": body.strip(),
+                    "step_id": step["id"], "subject": subject.strip(), "body": body_text,
                     "risk_level": risk["risk_level"], "risk_reason": risk["risk_reason"],
                     "status": "queued" if risk["risk_level"] == "LOW" else "pending_review",
                 })
@@ -121,16 +126,26 @@ async def process_campaign_run(settings: Settings, run_id: str) -> None:
 
         async def process_chunk(lead_chunk: list[dict]) -> None:
             nonlocal processed, skipped, failed, rate_limit_seen
+            suppressed = await get_suppressed_emails(settings, {
+                str(lead.get("email") or "") for lead in lead_chunk
+            })
+            eligible_chunk = []
+            for lead in lead_chunk:
+                if str(lead.get("email") or "").strip().lower() in suppressed:
+                    skipped += 1
+                    skip_log.append({"lead_id": lead.get("id"), "reason": "recipient_opted_out"})
+                else:
+                    eligible_chunk.append(lead)
             existing_keys = set()
-            if "leads" not in data:
+            if "leads" not in data and eligible_chunk:
                 existing_keys = await get_existing_personalization_keys(
-                    settings, run_id, [str(lead["id"]) for lead in lead_chunk])
+                    settings, run_id, [str(lead["id"]) for lead in eligible_chunk])
             results = await asyncio.gather(*(
                 _process_lead(settings, run_id, campaign, steps, lead, semaphore, existing_keys)
-                for lead in lead_chunk
+                for lead in eligible_chunk
             ), return_exceptions=True)
 
-            for lead, outcome in zip(lead_chunk, results, strict=True):
+            for lead, outcome in zip(eligible_chunk, results, strict=True):
                 if isinstance(outcome, Exception):
                     failed += 1
                     failure_log.append({"lead_id": lead.get("id"), "business_name": lead.get("business_name"),

@@ -12,6 +12,7 @@ type Reply = {
   body: string;
   received_at: string;
   status: "new" | "read";
+  opted_out?: boolean;
   leads?: { business_name?: string; email?: string } | null;
   campaigns?: { name?: string } | null;
 };
@@ -41,6 +42,8 @@ export default function LeadReplies({ apiBase }: Props) {
   const [campaignFilter, setCampaignFilter] = useState("all");
   const [dateFilter, setDateFilter] = useState("all");
   const [openId, setOpenId] = useState("");
+  const [optOutBusy, setOptOutBusy] = useState("");
+  const [notice, setNotice] = useState("");
 
   const loadReplies = useCallback(async (showLoading = true) => {
     if (showLoading) setLoading(true);
@@ -110,6 +113,25 @@ export default function LeadReplies({ apiBase }: Props) {
     }
   }
 
+  async function markOptOut(reply: Reply) {
+    const address = reply.leads?.email || reply.from_email;
+    if (!window.confirm(`Add ${address} to the global opt-out list? Future imports, personalization and Instantly sync will skip this address.`)) return;
+    setOptOutBusy(reply.id);
+    setError("");
+    setNotice("");
+    try {
+      const response = await apiFetch(`${apiBase}/api/lead-replies/${reply.id}/opt-out`, { method: "POST" });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.detail || "Could not record the opt-out.");
+      setReplies(current => current.map(item => item.id === reply.id ? { ...item, opted_out: true } : item));
+      setNotice(`${data.email || address} was added to the global opt-out list.`);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Could not record the opt-out.");
+    } finally {
+      setOptOutBusy("");
+    }
+  }
+
   const visibleReplies = useMemo(() => replies.filter(reply => {
     if (readFilter === "unread" && reply.status !== "new") return false;
     if (readFilter === "read" && reply.status !== "read") return false;
@@ -143,6 +165,7 @@ export default function LeadReplies({ apiBase }: Props) {
         <span>Automatic inbox check runs every minute while the backend is online.</span>
       </div>
       {error && <p role="alert" className="error">{error}</p>}
+      {notice && <p role="status" className="success">{notice}</p>}
       <section className="card replies-card">
         <div className="replies-toolbar">
           <input aria-label="Search replies" value={search} onChange={event => setSearch(event.target.value)} placeholder="Search sender, business, campaign or reply" />
@@ -184,7 +207,8 @@ export default function LeadReplies({ apiBase }: Props) {
             </button>
             {expanded && <div className="reply-expanded"><div className="reply-meta"><span>From <b>{reply.from_email}</b></span>
               {reply.leads?.email && <span>Lead <b>{reply.leads.email}</b></span>}{reply.campaigns?.name && <span>Campaign <b>{reply.campaigns.name}</b></span>}
-            </div><h3>{reply.subject || "(no subject)"}</h3><div className="reply-body-card"><p>{cleanBody || "No new reply text was detected."}</p></div>
+            </div>{reply.opted_out && <p className="reply-opt-out-badge">On global opt-out list · future campaign sync is blocked</p>}<h3>{reply.subject || "(no subject)"}</h3><div className="reply-body-card"><p>{cleanBody || "No new reply text was detected."}</p></div>
+              <div className="reply-actions"><button type="button" className="secondary-button" disabled={reply.opted_out || optOutBusy === reply.id} onClick={() => void markOptOut(reply)}>{reply.opted_out ? "Opt-out recorded" : optOutBusy === reply.id ? "Saving opt-out…" : "Mark as opt-out"}</button></div>
               {quoted && <details className="reply-quoted"><summary>Show quoted email</summary><pre>{quoted}</pre></details>}</div>}
           </article>;
         })}</div>{hasMore && !search && <div className="reply-load-more"><button className="secondary-button" type="button" disabled={loadingMore} onClick={() => void loadMore()}>{loadingMore ? "Loading…" : "Load more replies"}</button></div>}</>}

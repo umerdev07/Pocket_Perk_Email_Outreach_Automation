@@ -11,6 +11,7 @@ from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 
 from app.config import Settings, get_settings
 from app.lead_batches_db import delete_lead_batch, get_batch_lead_personalized_emails, get_lead_batch_details
+from app.suppression_db import get_suppressed_emails
 
 router = APIRouter(prefix="/api/leads", tags=["leads"])
 batch_router = APIRouter(tags=["lead batches"])
@@ -57,7 +58,7 @@ async def list_lead_batches(settings: Settings = Depends(get_settings)):
     async with httpx.AsyncClient(timeout=15) as client:
         response = await client.get(
             f"{settings.supabase_url.rstrip('/')}/rest/v1/lead_batches",
-            params={"select": "id,file_name,imported_count,created_at", "order": "created_at.desc"},
+            params={"select": "id,file_name,imported_count,suppressed_count,created_at", "order": "created_at.desc"},
             headers={"apikey": key, "Authorization": f"Bearer {key}"},
         )
     if not response.is_success:
@@ -77,7 +78,7 @@ async def get_lead_batch_report(batch_id: UUID, limit: int = Query(default=10, g
     base = settings.supabase_url.rstrip("/") + "/rest/v1"
     async with httpx.AsyncClient(timeout=15) as client:
         batch_response = await client.get(f"{base}/lead_batches", params={
-            "select": "id,file_name,total_rows,imported_count,duplicate_count,invalid_count,rejected_count,reject_log,created_at",
+            "select": "id,file_name,total_rows,imported_count,duplicate_count,invalid_count,rejected_count,suppressed_count,reject_log,created_at",
             "id": f"eq.{batch_id}", "limit": "1",
         }, headers=headers)
         if not batch_response.is_success:
@@ -140,7 +141,8 @@ async def persist_import(settings: Settings, file_name: str, rows: list[dict], c
         response = await client.post(f"{base}/lead_batches", headers=headers, json={
             "file_name": file_name, "total_rows": len(rows), "imported_count": counts["imported"],
             "duplicate_count": counts["duplicate"], "invalid_count": counts["invalid"],
-            "rejected_count": counts["rejected"], "reject_log": rejected,
+            "rejected_count": counts["rejected"], "suppressed_count": counts.get("suppressed", 0),
+            "reject_log": rejected,
         })
         if not response.is_success or not response.json():
             raise HTTPException(status_code=503, detail="Could not create the lead import batch.")
@@ -264,13 +266,18 @@ async def import_leads(file: UploadFile = File(...), settings: Settings = Depend
     db_emails, db_domains = await _existing_values(settings, {r["email"] for r in valid_candidates},
                                                    {r["domain"] for r in valid_candidates if r["domain"]})
     seen_emails, seen_domains = set(db_emails), set(db_domains)
-    preview, counts = [], {"imported": 0, "duplicate": 0, "invalid": 0, "rejected": 0}
+    suppressed_emails = await get_suppressed_emails(settings, {r["email"] for r in valid_candidates})
+    preview, counts = [], {"imported": 0, "duplicate": 0, "invalid": 0, "rejected": 0, "suppressed": 0}
     for row in rows:
         status = "valid"
         if not row["business_name"]:
             status = "rejected"
         elif not EMAIL_RE.fullmatch(row["email"]):
             status = "invalid"
+        elif row["email"] in suppressed_emails:
+            status = "rejected"
+            row["rejection_reason"] = "This address previously opted out and is suppressed."
+            counts["suppressed"] += 1
         elif row["email"] in seen_emails or (row["domain"] and row["domain"] in seen_domains):
             status = "duplicate"
         else:

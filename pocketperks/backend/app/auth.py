@@ -79,6 +79,8 @@ def allowed_roles(path: str, method: str) -> set[str]:
         return {"admin", "operator", "reviewer"}
     if path.startswith("/api/lead-replies/") and method == "PATCH":
         return {"admin", "operator", "reviewer"}
+    if path.startswith("/api/lead-replies/") and method == "POST":
+        return {"admin", "operator", "reviewer"}
     if method == "DELETE":
         return {"admin"}
     if path.startswith("/api/approvals"):

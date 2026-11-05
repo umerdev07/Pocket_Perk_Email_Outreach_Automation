@@ -14,6 +14,7 @@ from app.instantly_sync_db import (create_campaign_mapping, get_lead_mapping_sta
 from app.integrations.instantly_client import (BadResponseError, InstantlyTimeoutError,
                                                InstantlyWriteError, add_campaign_leads,
                                                create_campaign)
+from app.suppression_db import get_suppressed_emails
 
 INSTANTLY_SCHEDULE_TIMEZONE = "Asia/Karachi"
 
@@ -106,7 +107,11 @@ def build_lead_payload(lead: dict[str, Any], personalized_steps: list[dict[str, 
         if not isinstance(subject, str) or not subject.strip() or not isinstance(body, str) or not body.strip():
             raise ValueError("Every queued email needs a subject and body.")
         variables[f"pp_email_{index}_subject"] = subject.strip()
-        variables[f"pp_email_{index}_body"] = body.strip()
+        body_text = body.strip()
+        opt_out_line = "To stop future PocketPerks emails, reply STOP."
+        if "reply stop" not in body_text.lower() and "unsubscribe" not in body_text.lower():
+            body_text = f"{body_text}\n\n{opt_out_line}"
+        variables[f"pp_email_{index}_body"] = body_text
 
     business_name = lead.get("business_name") or ""
     return {
@@ -169,13 +174,22 @@ async def sync_completed_run(settings: Settings, run_id: str) -> dict[str, int |
                                           offset=offset, limit=page_size)
         if not leads:
             break
+        suppressed_emails = await get_suppressed_emails(settings, {
+            str(lead.get("email") or "") for lead in leads
+        })
         states = await get_lead_mapping_statuses(settings, mapping["id"], [str(row["id"]) for row in leads])
         candidates: list[dict] = []
         mapping_rows: list[dict] = []
+        suppressed_mapping_rows: list[dict] = []
         for lead in leads:
             previous = states.get(str(lead["id"]))
             if previous and previous.get("status") in {"synced", "skipped", "unknown", "failed"}:
                 counts[previous["status"]] += 1
+                continue
+            if str(lead.get("email") or "").strip().lower() in suppressed_emails:
+                counts["skipped"] += 1
+                suppressed_mapping_rows.append({"lead_id": str(lead["id"]), "status": "skipped",
+                                                "error_detail": "Recipient opted out; address is on the global suppression list."})
                 continue
             emails = sorted(lead.get("personalized_steps", []), key=lambda item: item.get("step_number") or 0)
             # A lead with even one review-required, missing, or failed step is held out.
@@ -192,6 +206,8 @@ async def sync_completed_run(settings: Settings, run_id: str) -> dict[str, int |
             mapping_rows.append({"lead_id": str(lead["id"]), "status": "unknown",
                                  "error_detail": "Sync in progress; reconcile provider before retrying."})
 
+        if suppressed_mapping_rows:
+            await save_lead_mappings(settings, mapping["id"], suppressed_mapping_rows)
         if candidates:
             await save_lead_mappings(settings, mapping["id"], mapping_rows)
             await update_campaign_mapping(settings, mapping["id"], {"status": "syncing_leads", "error_detail": None})

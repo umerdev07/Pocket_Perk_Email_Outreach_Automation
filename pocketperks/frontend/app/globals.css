@@ -396,3 +396,6 @@ body { background: var(--paper); color: var(--ink); }
   .email-status-chart { grid-template-columns: 1fr; justify-items: center; }
   .email-status-legend { width: 100%; }
 }
+
+.reply-actions { display: flex; justify-content: flex-end; margin-top: 12px; }
+.reply-opt-out-badge { width: fit-content; margin: 8px 0; padding: 6px 10px; border-radius: 999px; background: #fff4df; color: #855900; font-size: 12px; }

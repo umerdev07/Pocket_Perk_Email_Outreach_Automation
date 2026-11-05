@@ -1,10 +1,35 @@
 """Supabase persistence for replies imported from Instantly Unibox."""
 from datetime import UTC, datetime
+import re
 
 import httpx
 from fastapi import HTTPException
 
 from app.config import Settings
+from app.suppression_db import get_suppressed_emails, normalize_email, save_suppressions
+
+_OPT_OUT_RE = re.compile(
+    r"\b(?:unsubscribe(?:\s+me)?|opt\s+me\s+out|remove\s+me\s+from\s+(?:your\s+)?(?:list|mailing\s+list)|"
+    r"take\s+me\s+off\s+(?:your\s+)?(?:list|mailing\s+list)|do\s+not\s+(?:email|contact)\s+me|"
+    r"don't\s+(?:email|contact)\s+me|i\s+don't\s+want\s+(?:any\s+)?(?:more\s+)?emails?|"
+    r"no\s+more\s+emails|stop\s+(?:emailing|contacting|sending\s+me\s+emails?))\b",
+    re.IGNORECASE,
+)
+_QUOTED_REPLY_MARKER = re.compile(
+    r"^\s*(?:On .{3,220}wrote:|-{2,}\s*Original Message\s*-{2,}|From:\s+.+|>|_{5,}\s*$)",
+    re.IGNORECASE,
+)
+
+
+def _explicit_opt_out(body: str) -> bool:
+    """Classify only clear requests in the new reply, never quoted campaign copy."""
+    new_lines = []
+    for line in body.replace("\r\n", "\n").replace("\r", "\n").split("\n"):
+        if _QUOTED_REPLY_MARKER.match(line):
+            break
+        new_lines.append(line)
+    new_text = " ".join(new_lines).strip()
+    return bool(new_text and (_OPT_OUT_RE.search(new_text) or re.fullmatch(r"stop[.!\s]*", new_text, re.I)))
 
 
 def _base(settings: Settings) -> str:
@@ -39,7 +64,14 @@ async def list_replies(settings: Settings, *, limit: int = 100, offset: int = 0)
             "select": "id,lead_id,campaign_id,from_email,subject,body,instantly_id,received_at,status,created_at,leads(business_name,email),campaigns(name)",
             "order": "received_at.desc", "limit": limit, "offset": offset,
         }, headers=_headers(settings))
-    return _rows(response, "Could not load lead replies.")
+    rows = _rows(response, "Could not load lead replies.")
+    addresses = {str((row.get("leads") or {}).get("email") or row.get("from_email") or "") for row in rows}
+    suppressed = await get_suppressed_emails(settings, addresses)
+    for row in rows:
+        lead = row.get("leads") if isinstance(row.get("leads"), dict) else {}
+        address = normalize_email(lead.get("email") or row.get("from_email"))
+        row["opted_out"] = address in suppressed if address else False
+    return rows
 
 
 async def save_received_replies(settings: Settings, emails: list[dict]) -> int:
@@ -73,6 +105,7 @@ async def save_received_replies(settings: Settings, emails: list[dict]) -> int:
                     campaign_by_provider_id[str(row["instantly_campaign_id"])] = str(relation["campaign_id"])
 
         pending = []
+        opt_out_records = []
         for item in emails:
             provider_id = item.get("id")
             sender = item.get("from_address_email")
@@ -100,6 +133,15 @@ async def save_received_replies(settings: Settings, emails: list[dict]) -> int:
                 "received_at": received_at,
                 "status": "new" if item.get("is_unread") else "read",
             })
+            normalized_recipient = normalize_email((lead or {}).get("email") or lead_email)
+            if normalized_recipient and _explicit_opt_out(body):
+                opt_out_records.append({
+                    "email": normalized_recipient, "source": "reply_auto",
+                    "reason": "Recipient explicitly requested no further email.",
+                    "lead_id": lead.get("id") if lead else None, "campaign_id": campaign_id,
+                })
+        # Persist opt-outs before advancing reply sync so failures are retried.
+        await save_suppressions(settings, opt_out_records)
         inserted = 0
         for offset in range(0, len(pending), 100):
             chunk = pending[offset:offset + 100]
@@ -118,6 +160,27 @@ async def mark_reply_read(settings: Settings, reply_id: str) -> dict:
     if not rows:
         raise HTTPException(status_code=404, detail="Reply not found.")
     return rows[0]
+
+
+async def mark_reply_opt_out(settings: Settings, reply_id: str) -> dict:
+    """Manually confirm an ambiguous reply as an opt-out and suppress globally."""
+    async with httpx.AsyncClient(timeout=20) as client:
+        response = await client.get(f"{_base(settings)}/replies", params={
+            "select": "id,lead_id,campaign_id,from_email,leads(email)", "id": f"eq.{reply_id}", "limit": "1",
+        }, headers=_headers(settings))
+        rows = _rows(response, "Could not load this reply to record its opt-out.")
+    if not rows:
+        raise HTTPException(status_code=404, detail="Reply not found.")
+    row = rows[0]
+    lead = row.get("leads") if isinstance(row.get("leads"), dict) else {}
+    email = normalize_email(lead.get("email") or row.get("from_email"))
+    if not email:
+        raise HTTPException(status_code=422, detail="This reply does not have a valid recipient address to suppress.")
+    await save_suppressions(settings, [{
+        "email": email, "source": "reply_manual", "reason": "Opt-out confirmed by a workspace reviewer.",
+        "lead_id": row.get("lead_id"), "campaign_id": row.get("campaign_id"),
+    }])
+    return {"reply_id": reply_id, "email": email, "opted_out": True}
 
 
 async def get_reply_sync_state(settings: Settings) -> dict:

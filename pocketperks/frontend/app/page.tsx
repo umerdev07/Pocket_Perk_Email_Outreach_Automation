@@ -9,12 +9,12 @@ import BatchDetailsPanel from "./components/batch-details-panel";
 import { useWorkspaceAuth } from "./components/auth-gate";
 import { apiFetch } from "../lib/auth";
 type Row=Record<string,string>&{status:string};
-type Result={batch_id:string;preview:Row[];total_rows:number;summary:{imported:number;duplicate:number;invalid:number;rejected:number}};
+type Result={batch_id:string;preview:Row[];total_rows:number;summary:{imported:number;duplicate:number;invalid:number;rejected:number;suppressed:number}};
 type Campaign={id:string;name:string;total_emails:number;start_date:string|null;end_date:string|null;start_at?:string|null;end_at?:string|null;status:"draft"|"approved";created_at:string};
 function ukLocalDateTime(value:Date){const parts=new Intl.DateTimeFormat("en-GB",{timeZone:"Europe/London",year:"numeric",month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit",hourCycle:"h23"}).formatToParts(value);const part=(key:string)=>parts.find(item=>item.type===key)?.value||"00";return `${part("year")}-${part("month")}-${part("day")}T${part("hour")}:${part("minute")}`}
 function campaignTimeDefaults(){const now=new Date();now.setMinutes(now.getMinutes()+5,0,0);const start=ukLocalDateTime(now);let end=start.slice(0,10)+"T23:59";if(end<=start){const tomorrow=new Date(now.getTime()+24*60*60*1000);end=ukLocalDateTime(tomorrow).slice(0,10)+"T23:59"}return {start,end}}
 function campaignScheduleLabel(c:Campaign){if(c.start_at&&c.end_at){const format=(value:string)=>new Intl.DateTimeFormat("en-GB",{timeZone:"Europe/London",dateStyle:"medium",timeStyle:"short"}).format(new Date(value));return `${format(c.start_at)} – ${format(c.end_at)} UK`}return `${c.start_date||"—"} – ${c.end_date||"—"}`}
-type Batch={id:string;file_name:string;imported_count:number;created_at:string;total_rows?:number;duplicate_count?:number;invalid_count?:number;rejected_count?:number};
+type Batch={id:string;file_name:string;imported_count:number;created_at:string;total_rows?:number;duplicate_count?:number;invalid_count?:number;rejected_count?:number;suppressed_count?:number};
 type BatchReport={batch:{id:string;file_name:string;total_rows:number;imported_count:number;duplicate_count:number;invalid_count:number;rejected_count:number;created_at:string;reject_log:Array<{row:number;status:string;data?:Record<string,string>}>};leads:Row[];shown:number};
 type DraftStep={id:string;step_number:number;context:string;delay_days:number;draft:{id:string;subject:string;body:string;status:"generated"|"edited"|"approved";approved_at?:string;generation_status?:"idle"|"generating"|"succeeded"|"failed";generation_error?:string|null}|null};
 type CampaignReview={id:string;name:string;status:"draft"|"approved";steps:DraftStep[]};

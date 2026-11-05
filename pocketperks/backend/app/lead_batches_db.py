@@ -24,7 +24,7 @@ async def get_lead_batch_details(settings: Settings, batch_id: str, *, view: str
     base, headers = _base(settings), _headers(settings)
     async with httpx.AsyncClient(timeout=30) as client:
         response = await client.get(f"{base}/lead_batches", params={
-            "select": "id,file_name,total_rows,imported_count,duplicate_count,invalid_count,rejected_count,reject_log,created_at",
+            "select": "id,file_name,total_rows,imported_count,duplicate_count,invalid_count,rejected_count,suppressed_count,reject_log,created_at",
             "id": f"eq.{batch_id}", "limit": "1",
         }, headers=headers)
         if not response.is_success:

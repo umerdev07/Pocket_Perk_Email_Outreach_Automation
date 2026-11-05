@@ -5,7 +5,7 @@ import { apiFetch } from "../../lib/auth";
 import { useEffect, useRef, useState } from "react";
 
 type Batch = { id: string; file_name: string; total_rows?: number; imported_count: number; duplicate_count?: number;
-  invalid_count?: number; rejected_count?: number; created_at?: string };
+  invalid_count?: number; rejected_count?: number; suppressed_count?: number; created_at?: string };
 type Lead = Record<string, string | null> & { id: string; business_name?: string; email?: string };
 type Rejected = { row: number; status: string; data?: Record<string, string> };
 type Email = { id: string; subject: string; body: string; status: string; risk_level?: string; risk_reason?: string;
@@ -107,7 +107,7 @@ export default function BatchDetailsPanel({ apiBase, batch, onStart }: { apiBase
   return <section className="batch-details" aria-label={`Import details for ${batch.file_name}`}>
     {(() => { const detailBatch = page?.batch || batch; const rejectedCount = (detailBatch.duplicate_count || 0) + (detailBatch.invalid_count || 0) + (detailBatch.rejected_count || 0); return <>
     <div className="batch-details-heading"><div><small className="eyebrow">IMPORT DETAILS</small><h3>{detailBatch.file_name}</h3><p>{detailBatch.total_rows ?? detailBatch.imported_count} source rows · {detailBatch.imported_count} imported</p></div><button className="action-button" disabled={!detailBatch.imported_count} onClick={onStart}>Start Campaign →</button></div>
-    <div className="batch-detail-stats"><span>Imported <b>{detailBatch.imported_count}</b></span><span>Duplicates <b>{detailBatch.duplicate_count ?? 0}</b></span><span>Invalid <b>{detailBatch.invalid_count ?? 0}</b></span><span>Rejected <b>{detailBatch.rejected_count ?? 0}</b></span></div>
+    <div className="batch-detail-stats"><span>Imported <b>{detailBatch.imported_count}</b></span><span>Duplicates <b>{detailBatch.duplicate_count ?? 0}</b></span><span>Invalid <b>{detailBatch.invalid_count ?? 0}</b></span><span>Rejected <b>{detailBatch.rejected_count ?? 0}</b></span><span>Opted out <b>{detailBatch.suppressed_count ?? 0}</b></span></div>
     <div className="batch-detail-tabs"><button className={view === "imported" ? "active" : ""} onClick={() => changeView("imported")}>Imported leads ({detailBatch.imported_count})</button><button className={view === "not_imported" ? "active" : ""} onClick={() => changeView("not_imported")}>Not imported ({rejectedCount})</button></div>
     </>; })()}
     {error && <p className="error" role="alert">{error}</p>}
