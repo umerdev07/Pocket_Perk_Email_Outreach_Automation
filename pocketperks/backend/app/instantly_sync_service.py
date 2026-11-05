@@ -15,6 +15,8 @@ from app.integrations.instantly_client import (BadResponseError, InstantlyTimeou
                                                InstantlyWriteError, add_campaign_leads,
                                                create_campaign)
 
+INSTANTLY_SCHEDULE_TIMEZONE = "Etc/GMT-5"  # Instantly's accepted Etc/GMT form for Pakistan UTC+5.
+
 
 def build_campaign_payload(campaign: dict[str, Any], steps: list[dict[str, Any]], *,
                            delay_hours: int = 4) -> dict[str, Any]:
@@ -29,8 +31,9 @@ def build_campaign_payload(campaign: dict[str, Any], steps: list[dict[str, Any]]
             end_dt = datetime.fromisoformat(str(end_at).replace("Z", "+00:00"))
             if start_dt.tzinfo is None or end_dt.tzinfo is None:
                 raise ValueError
-            london = ZoneInfo("Europe/London")
-            start, end = start_dt.astimezone(london).date(), end_dt.astimezone(london).date()
+            schedule_timezone = ZoneInfo(INSTANTLY_SCHEDULE_TIMEZONE)
+            start = start_dt.astimezone(schedule_timezone).date()
+            end = end_dt.astimezone(schedule_timezone).date()
         except (ValueError, TypeError) as exc:
             raise ValueError("Campaign start and end timestamps must be timezone-aware ISO values.") from exc
     elif start_date and end_date:
@@ -78,7 +81,7 @@ def build_campaign_payload(campaign: dict[str, Any], steps: list[dict[str, Any]]
                 "timing": {"from": "09:00", "to": "17:00"},
                 "days": {"0": False, "1": True, "2": True, "3": True,
                          "4": True, "5": True, "6": False},
-                "timezone": "Europe/London",
+                "timezone": INSTANTLY_SCHEDULE_TIMEZONE,
             }],
         },
         "sequences": [{"steps": sequence_steps}],
