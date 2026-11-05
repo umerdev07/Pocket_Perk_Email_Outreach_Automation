@@ -192,6 +192,29 @@ async def list_received_emails(*, settings: Settings | None = None, limit: int =
     raise InstantlyRequestError("Instantly reply sync failed.")
 
 
+async def delete_email(email_id: str, *, settings: Settings | None = None) -> dict[str, Any]:
+    """Delete an email record from Instantly Unibox using the emails:delete scope."""
+    config = settings or get_settings()
+    try:
+        UUID(email_id)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("A valid Instantly email ID is required.") from exc
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as session:
+            response = await session.delete(f"{EMAILS_URL}/{email_id}", headers=_write_headers(config))
+    except httpx.TimeoutException as exc:
+        raise InstantlyTimeoutError("Instantly email deletion timed out; refresh Unibox before retrying.") from exc
+    except httpx.HTTPError as exc:
+        raise InstantlyRequestError("Could not communicate with Instantly to delete the email.") from exc
+    if response.status_code == 404:
+        return {"id": email_id, "already_deleted": True}
+    if response.status_code in (401, 403):
+        raise AuthenticationError("Instantly rejected the API key or its emails:delete permission.")
+    if not response.is_success:
+        _write_error(response, "email deletion")
+    return {"id": email_id, "already_deleted": False}
+
+
 async def list_campaign_sent_emails(campaign_id: str, *, settings: Settings | None = None,
                                     limit: int = 100,
                                     min_timestamp_created: str | None = None) -> list[dict[str, Any]]:

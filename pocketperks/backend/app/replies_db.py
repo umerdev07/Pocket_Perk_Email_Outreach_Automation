@@ -6,6 +6,12 @@ import httpx
 from fastapi import HTTPException
 
 from app.config import Settings
+from app.integrations.instantly_client import (
+    AuthenticationError,
+    InstantlyError,
+    PlanAccessError,
+    delete_email as delete_instantly_email,
+)
 from app.suppression_db import get_suppressed_emails, normalize_email, save_suppressions
 
 _OPT_OUT_RE = re.compile(
@@ -180,6 +186,40 @@ async def mark_reply_read(settings: Settings, reply_id: str) -> dict:
     if not rows:
         raise HTTPException(status_code=404, detail="Reply not found.")
     return rows[0]
+
+
+async def delete_reply(settings: Settings, reply_id: str) -> dict:
+    """Delete an Instantly Unibox email first, then remove its PocketPerks copy."""
+    async with httpx.AsyncClient(timeout=20) as client:
+        response = await client.get(f"{_base(settings)}/replies", params={
+            "select": "id,instantly_id", "id": f"eq.{reply_id}", "limit": "1",
+        }, headers=_headers(settings))
+        rows = _rows(response, "Could not load this reply before deletion.")
+        if not rows:
+            raise HTTPException(status_code=404, detail="Reply not found.")
+        provider_id = rows[0].get("instantly_id")
+        if not isinstance(provider_id, str) or not provider_id.strip():
+            raise HTTPException(status_code=409, detail="This reply has no Instantly email ID, so it was kept in both views.")
+
+    try:
+        await delete_instantly_email(provider_id, settings=settings)
+    except AuthenticationError as exc:
+        raise HTTPException(status_code=503, detail=(
+            "Instantly deletion needs an API key with the emails:delete scope. Create a new key with that scope and update the backend key."
+        )) from exc
+    except PlanAccessError as exc:
+        raise HTTPException(status_code=503, detail="The Instantly plan does not allow deleting this Unibox email.") from exc
+    except InstantlyError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    async with httpx.AsyncClient(timeout=20) as client:
+        response = await client.delete(f"{_base(settings)}/replies", params={"id": f"eq.{reply_id}"},
+                                       headers=_headers(settings, "return=representation"))
+    deleted = _rows(response, "Instantly deleted the email, but PocketPerks could not remove its local reply. Refresh and retry.")
+    if not deleted:
+        # The provider deletion succeeded. Treat concurrent local deletion as an idempotent success.
+        return {"reply_id": reply_id, "deleted": True}
+    return {"reply_id": reply_id, "deleted": True}
 
 
 async def mark_reply_opt_out(settings: Settings, reply_id: str, actor_user_id: str) -> dict:

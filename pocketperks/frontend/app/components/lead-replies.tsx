@@ -44,6 +44,7 @@ export default function LeadReplies({ apiBase, canManageSuppressions = false }: 
   const [dateFilter, setDateFilter] = useState("all");
   const [openId, setOpenId] = useState("");
   const [optOutBusy, setOptOutBusy] = useState("");
+  const [deleteBusy, setDeleteBusy] = useState("");
   const [releaseBusy, setReleaseBusy] = useState("");
   const [releaseReplyId, setReleaseReplyId] = useState("");
   const [releaseReason, setReleaseReason] = useState("");
@@ -162,6 +163,25 @@ export default function LeadReplies({ apiBase, canManageSuppressions = false }: 
     }
   }
 
+  async function deleteLeadReply(reply: Reply) {
+    if (!window.confirm(`Permanently delete this reply from Instantly Unibox and PocketPerks? The recipient's mailbox copy will not be deleted.`)) return;
+    setDeleteBusy(reply.id);
+    setError("");
+    setNotice("");
+    try {
+      const response = await apiFetch(`${apiBase}/api/lead-replies/${reply.id}`, { method: "DELETE" });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.detail || "Could not delete this reply.");
+      setReplies(current => current.filter(item => item.id !== reply.id));
+      if (openId === reply.id) setOpenId("");
+      setNotice("Reply deleted from Instantly Unibox and PocketPerks.");
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Could not delete this reply.");
+    } finally {
+      setDeleteBusy("");
+    }
+  }
+
   const visibleReplies = useMemo(() => replies.filter(reply => {
     if (readFilter === "unread" && reply.status !== "new") return false;
     if (readFilter === "read" && reply.status !== "read") return false;
@@ -240,7 +260,8 @@ export default function LeadReplies({ apiBase, canManageSuppressions = false }: 
             {expanded && <div className="reply-expanded"><div className="reply-meta"><span>From <b>{reply.from_email}</b></span>
               {reply.leads?.email && <span>Lead <b>{reply.leads.email}</b></span>}{reply.campaigns?.name && <span>Campaign <b>{reply.campaigns.name}</b></span>}
             </div>{reply.opted_out && <p className="reply-opt-out-badge">On global opt-out list · future campaign sync is blocked</p>}<h3>{reply.subject || "(no subject)"}</h3><div className="reply-body-card"><p>{cleanBody || "No new reply text was detected."}</p></div>
-              <div className="reply-actions"><button type="button" className="secondary-button" disabled={reply.opted_out || optOutBusy === reply.id} onClick={() => void markOptOut(reply)}>{reply.opted_out ? "Opt-out recorded" : optOutBusy === reply.id ? "Saving opt-out…" : "Mark as opt-out"}</button>
+              <div className="reply-actions"><button type="button" className="secondary-button reply-delete-button" disabled={deleteBusy === reply.id} onClick={() => void deleteLeadReply(reply)} aria-label="Delete reply from Instantly and PocketPerks"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M10 11v6m4-6v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg>{deleteBusy === reply.id ? "Deleting…" : "Delete reply"}</button>
+                <button type="button" className="secondary-button" disabled={reply.opted_out || optOutBusy === reply.id} onClick={() => void markOptOut(reply)}>{reply.opted_out ? "Opt-out recorded" : optOutBusy === reply.id ? "Saving opt-out…" : "Mark as opt-out"}</button>
                 {canManageSuppressions && reply.opted_out && <button type="button" className="secondary-button" disabled={releaseBusy === reply.id} onClick={() => {
                   setReleaseReplyId(current => current === reply.id ? "" : reply.id);
                   setReleaseReason(""); setReleaseConsent(false); setError(""); setNotice("");

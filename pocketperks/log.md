@@ -252,3 +252,7 @@ This log records completed work and verification reported in this project chat. 
 ## Suppression release RPC correction
 - Added migration `021_fix_suppression_release_rpc.sql` to avoid the PL/pgSQL argument/column name collision that could make an admin release fail. It replaces only the release RPC and preserves the same service-role-only signature used by the backend.
 - Apply migration 021 in Supabase after 020, then restart the backend. Retest the email from Lead Replies; it should show as released and disappear from the active suppression indicator. The re-consent checkbox and audit reason remain required.
+
+## Lead reply deletion
+- Added an admin-protected reply delete action that deletes the email record from Instantly Unibox first and then removes the local PocketPerks copy. A confirmation explains that this does not delete the recipient's mailbox copy. Provider failure keeps the local reply intact.
+- Instantly documents `DELETE /api/v2/emails/{id}` and requires the `emails:delete` scope. The current key only has `emails:read` for inbox access, so create a new least-privilege key with `emails:delete` added and update the backend `INSTANTLY_API_KEY` before using this control; existing Instantly key scopes cannot be expanded.

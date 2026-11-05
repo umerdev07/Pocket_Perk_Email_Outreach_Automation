@@ -497,3 +497,7 @@ Koi fake business data repo mein nahi. Testing ke liye user apni asli (ya sample
 
 ### Suppression release RPC correction
 - Migration 021 fixes a PL/pgSQL name collision in the audited suppression release function introduced by migration 020. Apply it after migration 020, then restart the backend before retrying the admin release action.
+
+### Lead reply deletion
+- Added admin-only deletion from Instantly Unibox and the local reply view. It deletes the provider email first, preserving the local record if Instantly rejects the request. This does not remove a copy already delivered to the recipient's mailbox.
+- Instantly requires `emails:delete` for this API. The configured key currently has `emails:read`, so make a new least-privilege API key that retains the existing required scopes and adds `emails:delete`, then update the backend key. Redeploy/restart the backend after that key update.
