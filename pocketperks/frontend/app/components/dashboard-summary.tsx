@@ -33,12 +33,14 @@ export default function DashboardSummary({ apiBase, refreshKey, onNavigate }: Pr
   const [summary, setSummary] = useState<Summary | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [activityDays, setActivityDays] = useState(14);
+  const [selectedEmailStatus, setSelectedEmailStatus] = useState("");
 
   const loadSummary = useCallback(async () => {
     setLoading(true);
     setError("");
     try {
-      const response = await apiFetch(`${apiBase}/api/dashboard/summary`);
+      const response = await apiFetch(`${apiBase}/api/dashboard/summary?days=${activityDays}`);
       const data = await response.json() as Summary & { detail?: string };
       if (!response.ok) throw new Error(data.detail || "Could not load dashboard totals.");
       setSummary(data);
@@ -47,7 +49,7 @@ export default function DashboardSummary({ apiBase, refreshKey, onNavigate }: Pr
     } finally {
       setLoading(false);
     }
-  }, [apiBase]);
+  }, [apiBase, activityDays]);
 
   useEffect(() => {
     void loadSummary();
@@ -59,7 +61,7 @@ export default function DashboardSummary({ apiBase, refreshKey, onNavigate }: Pr
     { label: "Total leads", value: summary.total_leads, hint: "Imported and available", tone: "violet" },
     { label: "Campaigns", value: summary.total_campaigns, hint: `${summary.approved_campaigns} approved`, tone: "blue" },
     { label: "Needs approval", value: summary.pending_approvals, hint: "Human review required", tone: "amber" },
-    { label: "Queued · not sent", value: summary.queued_not_sent, hint: "Ready for sending setup", tone: "green" },
+    { label: "Queued · not confirmed sent", value: summary.queued_not_sent, hint: "Waiting for Instantly status sync", tone: "amber" },
     { label: "Personalization runs", value: summary.active_runs, hint: "Currently processing", tone: "blue" },
     { label: "Instantly drafts", value: summary.instantly_campaigns, hint: "Synced; launch remains manual", tone: "violet" },
     { label: "Leads synced to Instantly", value: summary.instantly_leads_synced, hint: "Provider lead records", tone: "green" },
@@ -77,8 +79,8 @@ export default function DashboardSummary({ apiBase, refreshKey, onNavigate }: Pr
   const leadSeries = seriesPoints("leads");
   const replySeries = seriesPoints("replies");
   const emailStatusColors: Record<string, string> = {
-    generated: "#aab5ae", pending_review: "#d5a23d", approved: "#7390d4", queued: "#16843c",
-    sent: "#2385bd", sent_test: "#6eaecb", failed: "#cc5552", rejected: "#934c73",
+    generated: "#aab5ae", pending_review: "#d5a23d", approved: "#7390d4", queued: "#d5a23d",
+    sent: "#16843c", sent_test: "#6eaecb", failed: "#cc5552", rejected: "#934c73",
   };
   const emailStatuses = activity?.email_status?.filter(item => item.count > 0) || [];
   const emailStatusTotal = emailStatuses.reduce((total, item) => total + item.count, 0);
@@ -112,7 +114,10 @@ export default function DashboardSummary({ apiBase, refreshKey, onNavigate }: Pr
       </div>
       {summary && <div className="dashboard-charts">
         <article className="dashboard-chart-card activity-chart-card">
-          <div className="dashboard-chart-heading"><div><h3>Workspace activity</h3><p>Imported leads and received replies over time</p></div><span className="chart-period">Last 14 days</span></div>
+          <div className="dashboard-chart-heading"><div><h3>Workspace activity</h3><p>Imported leads and received replies over time</p></div>
+            <label className="chart-period-select"><span>Range</span><select aria-label="Workspace activity date range" value={activityDays} onChange={event => setActivityDays(Number(event.target.value))}>
+              <option value={7}>7 days</option><option value={14}>14 days</option><option value={30}>30 days</option><option value={90}>90 days</option>
+            </select></label></div>
           {activity?.available === false ? <p className="chart-empty">Apply migration 018 to enable activity charts.</p> : <>
             <svg className="activity-chart" viewBox="0 0 720 210" role="img" aria-label="Daily imported leads and received replies over the last 14 days">
               {[0, 0.5, 1].map(fraction => {
@@ -132,14 +137,24 @@ export default function DashboardSummary({ apiBase, refreshKey, onNavigate }: Pr
           </>}
         </article>
         <article className="dashboard-chart-card status-chart-card">
-          <div className="dashboard-chart-heading"><div><h3>Email workflow</h3><p>Current personalized email statuses</p></div></div>
+          <div className="dashboard-chart-heading"><div><h3>Email delivery status</h3><p>Provider-confirmed sends and remaining work</p></div></div>
           {activity?.available === false ? <p className="chart-empty">Apply migration 018 to enable workflow charts.</p> : emailStatusTotal === 0 ? <p className="chart-empty">Personalized email activity will appear here.</p> : <div className="email-status-chart">
             <div className="email-donut-wrap"><svg className="email-status-donut" viewBox="0 0 120 120" role="img" aria-label={`${emailStatusTotal} personalized emails by status`}>
               <circle cx="60" cy="60" r="42" stroke="#edf1ee"/>
-              {ringSegments.map(item => <circle key={item.status} cx="60" cy="60" r="42" stroke={item.color} strokeDasharray={`${item.length} ${ringLength - item.length}`} strokeDashoffset={-item.offset}><title>{formatStatus(item.status)}: {item.count}</title></circle>)}
+              {ringSegments.map(item => <circle key={item.status} cx="60" cy="60" r="42" stroke={item.color}
+                opacity={!selectedEmailStatus || selectedEmailStatus === item.status ? 1 : .2}
+                strokeDasharray={`${item.length} ${ringLength - item.length}`} strokeDashoffset={-item.offset}>
+                <title>{formatStatus(item.status)}: {item.count}</title></circle>)}
             </svg><div className="email-status-total"><b>{emailStatusTotal.toLocaleString()}</b><small>Email drafts</small></div></div>
-            <div className="email-status-legend">{ringSegments.map(item => <div key={item.status}><span><i style={{ backgroundColor: item.color }}/>{formatStatus(item.status)}</span><b>{item.count.toLocaleString()}</b></div>)}</div>
+            <div className="email-status-legend">{ringSegments.map(item => <button type="button" key={item.status}
+              className={selectedEmailStatus && selectedEmailStatus !== item.status ? "muted" : ""}
+              aria-pressed={selectedEmailStatus === item.status}
+              onClick={() => setSelectedEmailStatus(current => current === item.status ? "" : item.status)}>
+              <span><i style={{ backgroundColor: item.color }}/>{formatStatus(item.status)}</span><b>{item.count.toLocaleString()}</b></button>)}</div>
           </div>}
+          {selectedEmailStatus && emailStatuses.some(item => item.status === selectedEmailStatus) && <p className="chart-selection-note">
+            {formatStatus(selectedEmailStatus)}: {emailStatuses.find(item => item.status === selectedEmailStatus)?.count.toLocaleString()} emails · click again to clear
+          </p>}
         </article>
       </div>}
       <div className="dashboard-links">

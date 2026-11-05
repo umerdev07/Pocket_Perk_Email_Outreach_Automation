@@ -192,6 +192,53 @@ async def list_received_emails(*, settings: Settings | None = None, limit: int =
     raise InstantlyRequestError("Instantly reply sync failed.")
 
 
+async def list_campaign_sent_emails(campaign_id: str, *, settings: Settings | None = None,
+                                    limit: int = 100,
+                                    min_timestamp_created: str | None = None) -> list[dict[str, Any]]:
+    """Read a bounded page of confirmed sent emails for one mapped campaign."""
+    config = settings or get_settings()
+    headers = _write_headers(config)
+    if type(limit) is not int or not 1 <= limit <= 100:
+        raise ValueError("Email page size must be between 1 and 100.")
+    params: dict[str, Any] = {
+        "limit": limit, "email_type": "sent", "campaign_id": campaign_id,
+        "sort_order": "desc",
+    }
+    if min_timestamp_created:
+        params["min_timestamp_created"] = min_timestamp_created
+    for attempt in range(MAX_RETRIES + 1):
+        try:
+            async with httpx.AsyncClient(timeout=30.0) as session:
+                response = await session.get(EMAILS_URL, headers=headers, params=params)
+        except httpx.TimeoutException as exc:
+            raise InstantlyTimeoutError("Instantly sent-email status check timed out.") from exc
+        except httpx.HTTPError as exc:
+            raise InstantlyRequestError("Could not communicate with Instantly sent-email history.") from exc
+        if response.status_code == 429 or 500 <= response.status_code <= 599:
+            if attempt < MAX_RETRIES:
+                await asyncio.sleep(RETRY_BASE_SECONDS * (2 ** attempt))
+                continue
+            if response.status_code == 429:
+                raise RateLimitedError("Instantly sent-email status check was rate limited after retries.")
+            raise InstantlyRequestError("Instantly sent-email status check failed after retries.")
+        if response.status_code in (401, 403):
+            raise AuthenticationError("Instantly rejected the API key or its emails:read permission.")
+        if response.status_code == 402:
+            raise PlanAccessError("The Instantly workspace plan does not allow reading sent emails.")
+        if not response.is_success:
+            raise InstantlyRequestError(f"Instantly returned HTTP {response.status_code} for sent-email history.")
+        try:
+            payload = response.json()
+        except (ValueError, TypeError) as exc:
+            raise BadResponseError("Instantly returned invalid JSON for sent-email history.") from exc
+        if not isinstance(payload, dict) or not isinstance(payload.get("items"), list):
+            raise BadResponseError("Instantly returned an unexpected sent-email list.")
+        if any(not isinstance(item, dict) for item in payload["items"]):
+            raise BadResponseError("Instantly returned an invalid sent-email entry.")
+        return payload["items"]
+    raise InstantlyRequestError("Instantly sent-email status check failed.")
+
+
 def _write_headers(settings: Settings) -> dict[str, str]:
     if not settings.instantly_api_key:
         raise MissingAPIKeyError("Instantly API key is not configured.")

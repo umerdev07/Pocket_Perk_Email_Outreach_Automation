@@ -353,6 +353,8 @@ body { background: var(--paper); color: var(--ink); }
 .dashboard-chart-heading h3 { margin: 0; font-size: 14px; }
 .dashboard-chart-heading p { margin: 5px 0 0; color: var(--muted); font-size: 10px; }
 .chart-period { border: 1px solid #e4ebe6; border-radius: 99px; padding: 6px 9px; color: var(--muted); font-size: 9px; white-space: nowrap; }
+.chart-period-select { display: inline-flex; align-items: center; gap: 7px; border: 1px solid #e4ebe6; border-radius: 99px; padding: 5px 9px; color: var(--muted); font-size: 9px; white-space: nowrap; }
+.chart-period-select select { border: 0; outline: 0; background: transparent; color: var(--ink); font: inherit; font-weight: 700; cursor: pointer; }
 .activity-chart { display: block; width: 100%; height: 220px; overflow: visible; }
 .activity-chart .chart-grid { stroke: #edf1ee; stroke-width: 1; }
 .activity-chart .chart-line-leads { fill: none; stroke: var(--brand-green); stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; }
@@ -372,11 +374,14 @@ body { background: var(--paper); color: var(--ink); }
 .email-status-total small { color: var(--muted); font-size: 9px; }
 .email-donut-wrap { position: relative; width: 126px; height: 126px; }
 .email-status-legend { display: grid; gap: 9px; max-height: 190px; overflow: auto; }
-.email-status-legend div { display: flex; align-items: center; justify-content: space-between; gap: 8px; color: var(--muted); font-size: 10px; }
+.email-status-legend button { display: flex; align-items: center; justify-content: space-between; gap: 8px; border: 1px solid transparent; border-radius: 7px; padding: 4px 6px; background: transparent; color: var(--muted); font: inherit; font-size: 10px; text-align: left; cursor: pointer; }
+.email-status-legend button:hover, .email-status-legend button[aria-pressed="true"] { border-color: #e4ebe6; background: #f7faf8; }
+.email-status-legend button.muted { opacity: .45; }
 .email-status-legend span { display: inline-flex; align-items: center; gap: 7px; min-width: 0; }
 .email-status-legend i { width: 8px; height: 8px; flex: 0 0 auto; border-radius: 50%; }
 .email-status-legend b { color: var(--ink); font-variant-numeric: tabular-nums; }
 .chart-empty { color: var(--muted); font-size: 11px; text-align: center; }
+.chart-selection-note { margin: 8px 0 0; color: var(--muted); font-size: 9px; text-align: center; }
 
 @media(max-width:900px) {
   .dashboard-charts { grid-template-columns: 1fr; }

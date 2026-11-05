@@ -29,8 +29,8 @@ async def _count(client, base: str, headers: dict[str, str], table: str, filters
         raise HTTPException(status_code=503, detail="Database did not return an exact dashboard count.") from exc
 
 
-async def _activity(client, base: str, headers: dict[str, str]) -> dict:
-    response = await client.post(f"{base}/rpc/dashboard_activity", json={"p_days": 14}, headers=headers)
+async def _activity(client, base: str, headers: dict[str, str], days: int) -> dict:
+    response = await client.post(f"{base}/rpc/dashboard_activity", json={"p_days": days}, headers=headers)
     if not response.is_success:
         return {"days": [], "campaign_status": [], "email_status": [], "available": False}
     try:
@@ -42,7 +42,9 @@ async def _activity(client, base: str, headers: dict[str, str]) -> dict:
     return value
 
 
-async def get_dashboard_summary(settings: Settings) -> dict:
+async def get_dashboard_summary(settings: Settings, *, activity_days: int = 14) -> dict:
+    if type(activity_days) is not int or not 7 <= activity_days <= 90:
+        raise ValueError("Dashboard activity must be between 7 and 90 days.")
     base, headers = _base(settings), _headers(settings)
     async with httpx.AsyncClient(timeout=20) as client:
         totals = await asyncio.gather(
@@ -56,7 +58,7 @@ async def get_dashboard_summary(settings: Settings) -> dict:
             _count(client, base, headers, "replies", {"status": "eq.new"}),
             _count(client, base, headers, "instantly_campaign_mappings", {"instantly_campaign_id": "not.is.null"}),
             _count(client, base, headers, "instantly_lead_mappings", {"status": "eq.synced"}),
-            _activity(client, base, headers),
+            _activity(client, base, headers, activity_days),
         )
     return {"total_leads": totals[0], "total_campaigns": totals[1], "approved_campaigns": totals[2],
             "pending_approvals": totals[3], "queued_not_sent": totals[4], "active_runs": totals[5],

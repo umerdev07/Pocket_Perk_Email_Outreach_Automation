@@ -227,3 +227,9 @@ This log records completed work and verification reported in this project chat. 
 - Added practical inbox filters for read state, campaign, received-time window and text search, plus a clear-filters action.
 - Added responsive dashboard charts: a 14-day imported-leads/replies trend and a personalized-email status donut. Chart data is aggregated in Postgres by migration `018_dashboard_activity.sql`; dashboard counters still load if the migration is pending, and charts show a migration hint.
 - Migration 018 must be applied in Supabase before chart data is available. Frontend/backend builds and automated tests were not run in this change.
+
+## Sent-email status reconciliation and interactive dashboard charts
+- Root cause: PocketPerks marked approved email drafts `queued` when preparing them for Instantly. After an operator manually launched the Instantly campaign, no provider-send status was read back, so those rows and the dashboard donut stayed `queued`.
+- Added read-only polling of Instantly campaign sent-email history. A local row moves from `queued` to `sent` only after campaign ID, mapped Instantly lead ID (or recipient fallback) and normalized subject match; the confirmed provider email ID and timestamp are retained. The poller scans at most five mapped campaigns per minute and continues inbox-reply polling; it never launches a campaign or sends email.
+- Dashboard activity range can now be changed to 7, 14, 30 or 90 days. The email-status donut has interactive legend selection; `sent` is green, while `queued` is amber and explicitly means awaiting provider confirmation.
+- No schema migration is needed for this status sync. Rebuild/restart the backend and redeploy the frontend for the changes. Automated tests/build were not run in this change.
