@@ -44,6 +44,10 @@ export default function LeadReplies({ apiBase, canManageSuppressions = false }: 
   const [dateFilter, setDateFilter] = useState("all");
   const [openId, setOpenId] = useState("");
   const [optOutBusy, setOptOutBusy] = useState("");
+  const [releaseBusy, setReleaseBusy] = useState("");
+  const [releaseReplyId, setReleaseReplyId] = useState("");
+  const [releaseReason, setReleaseReason] = useState("");
+  const [releaseConsent, setReleaseConsent] = useState(false);
   const [notice, setNotice] = useState("");
 
   const loadReplies = useCallback(async (showLoading = true) => {
@@ -133,6 +137,31 @@ export default function LeadReplies({ apiBase, canManageSuppressions = false }: 
     }
   }
 
+  async function releaseOptOut(reply: Reply) {
+    const address = reply.leads?.email || reply.from_email;
+    setReleaseBusy(reply.id);
+    setError("");
+    setNotice("");
+    try {
+      const response = await apiFetch(`${apiBase}/api/suppressions/${encodeURIComponent(address)}/release`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ reason: releaseReason, recipient_confirmed: releaseConsent }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.detail || "Could not re-enable this address.");
+      setReleaseReplyId("");
+      setReleaseReason("");
+      setReleaseConsent(false);
+      setNotice(`${address} is re-enabled for future campaigns. It will not be added to an active Instantly campaign.`);
+      await loadReplies(false);
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Could not re-enable this address.");
+    } finally {
+      setReleaseBusy("");
+    }
+  }
+
   const visibleReplies = useMemo(() => replies.filter(reply => {
     if (readFilter === "unread" && reply.status !== "new") return false;
     if (readFilter === "read" && reply.status !== "read") return false;
@@ -211,7 +240,20 @@ export default function LeadReplies({ apiBase, canManageSuppressions = false }: 
             {expanded && <div className="reply-expanded"><div className="reply-meta"><span>From <b>{reply.from_email}</b></span>
               {reply.leads?.email && <span>Lead <b>{reply.leads.email}</b></span>}{reply.campaigns?.name && <span>Campaign <b>{reply.campaigns.name}</b></span>}
             </div>{reply.opted_out && <p className="reply-opt-out-badge">On global opt-out list · future campaign sync is blocked</p>}<h3>{reply.subject || "(no subject)"}</h3><div className="reply-body-card"><p>{cleanBody || "No new reply text was detected."}</p></div>
-              <div className="reply-actions"><button type="button" className="secondary-button" disabled={reply.opted_out || optOutBusy === reply.id} onClick={() => void markOptOut(reply)}>{reply.opted_out ? "Opt-out recorded" : optOutBusy === reply.id ? "Saving opt-out…" : "Mark as opt-out"}</button></div>
+              <div className="reply-actions"><button type="button" className="secondary-button" disabled={reply.opted_out || optOutBusy === reply.id} onClick={() => void markOptOut(reply)}>{reply.opted_out ? "Opt-out recorded" : optOutBusy === reply.id ? "Saving opt-out…" : "Mark as opt-out"}</button>
+                {canManageSuppressions && reply.opted_out && <button type="button" className="secondary-button" disabled={releaseBusy === reply.id} onClick={() => {
+                  setReleaseReplyId(current => current === reply.id ? "" : reply.id);
+                  setReleaseReason(""); setReleaseConsent(false); setError(""); setNotice("");
+                }}>{releaseBusy === reply.id ? "Re-enabling…" : releaseReplyId === reply.id ? "Cancel re-enable" : "Re-enable for future campaigns"}</button>}</div>
+              {canManageSuppressions && releaseReplyId === reply.id && <form className="suppression-release-form reply-release-form" onSubmit={event => { event.preventDefault(); void releaseOptOut(reply); }}>
+                <h3>Re-enable {reply.leads?.email || reply.from_email}</h3>
+                <p>Only continue if the recipient explicitly asked to receive PocketPerks emails again. This removes the global suppression; it does not change an active Instantly campaign.</p>
+                <label>Audit reason<textarea required minLength={10} maxLength={300} value={releaseReason} onChange={event => setReleaseReason(event.target.value)} placeholder="How and when did the recipient confirm re-subscription?" rows={2}/></label>
+                <label className="suppression-consent"><input type="checkbox" checked={releaseConsent} onChange={event => setReleaseConsent(event.target.checked)}/>
+                  The recipient explicitly requested to receive PocketPerks emails again.</label>
+                <div><button type="button" className="secondary-button" onClick={() => setReleaseReplyId("")}>Cancel</button>
+                  <button type="submit" className="action-button" disabled={releaseBusy === reply.id || !releaseConsent || releaseReason.trim().length < 10}>{releaseBusy === reply.id ? "Saving…" : "Re-enable email"}</button></div>
+              </form>}
               {quoted && <details className="reply-quoted"><summary>Show quoted email</summary><pre>{quoted}</pre></details>}</div>}
           </article>;
         })}</div>{hasMore && !search && <div className="reply-load-more"><button className="secondary-button" type="button" disabled={loadingMore} onClick={() => void loadMore()}>{loadingMore ? "Loading…" : "Load more replies"}</button></div>}</>}
