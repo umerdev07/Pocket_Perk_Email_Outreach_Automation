@@ -42,6 +42,42 @@ async def _activity(client, base: str, headers: dict[str, str], days: int) -> di
     return value
 
 
+async def _latest_campaign_run(client, base: str, headers: dict[str, str]) -> dict | None:
+    response = await client.get(f"{base}/campaign_runs", params={
+        "select": "id,campaign_id,batch_id,status,total_leads,processed,skipped,failed,created_at,finished_at",
+        "order": "created_at.desc", "limit": "1",
+    }, headers=headers)
+    if not response.is_success:
+        raise HTTPException(status_code=503, detail="Could not load the latest campaign run.")
+    rows = response.json()
+    if not isinstance(rows, list) or not rows:
+        return None
+    run = rows[0]
+    run_id = str(run["id"])
+    campaign_response = await client.get(f"{base}/campaigns", params={
+        "select": "name", "id": f"eq.{run['campaign_id']}", "limit": "1",
+    }, headers=headers)
+    if not campaign_response.is_success:
+        raise HTTPException(status_code=503, detail="Could not load the latest campaign name.")
+    campaign_rows = campaign_response.json()
+    queued, sent, sent_test, failed, pending_review = await asyncio.gather(
+        _count(client, base, headers, "personalized_emails", {"run_id": f"eq.{run_id}", "status": "eq.queued"}),
+        _count(client, base, headers, "personalized_emails", {"run_id": f"eq.{run_id}", "status": "eq.sent"}),
+        _count(client, base, headers, "personalized_emails", {"run_id": f"eq.{run_id}", "status": "eq.sent_test"}),
+        _count(client, base, headers, "personalized_emails", {"run_id": f"eq.{run_id}", "status": "eq.failed"}),
+        _count(client, base, headers, "personalized_emails", {"run_id": f"eq.{run_id}", "status": "eq.pending_review"}),
+    )
+    return {
+        "run_id": run_id, "campaign_id": run["campaign_id"], "batch_id": run["batch_id"],
+        "campaign_name": campaign_rows[0].get("name") if campaign_rows else "Campaign",
+        "status": run["status"], "total_leads": run["total_leads"],
+        "processed": run["processed"], "skipped": run["skipped"], "failed_leads": run["failed"],
+        "created_at": run["created_at"], "finished_at": run.get("finished_at"),
+        "queued_emails": queued, "sent_emails": sent + sent_test,
+        "failed_emails": failed, "pending_review_emails": pending_review,
+    }
+
+
 async def get_dashboard_summary(settings: Settings, *, activity_days: int = 14) -> dict:
     if type(activity_days) is not int or not 7 <= activity_days <= 90:
         raise ValueError("Dashboard activity must be between 7 and 90 days.")
@@ -60,6 +96,7 @@ async def get_dashboard_summary(settings: Settings, *, activity_days: int = 14) 
             _count(client, base, headers, "instantly_lead_mappings", {"status": "eq.synced"}),
             _count(client, base, headers, "instantly_campaign_mappings", {"status": "eq.active"}),
             _activity(client, base, headers, activity_days),
+            _latest_campaign_run(client, base, headers),
         )
     return {"total_leads": totals[0], "total_campaigns": totals[1], "approved_campaigns": totals[2],
             "pending_approvals": totals[3], "queued_not_sent": totals[4], "active_runs": totals[5],
@@ -67,4 +104,4 @@ async def get_dashboard_summary(settings: Settings, *, activity_days: int = 14) 
             "instantly_campaigns": totals[8], "instantly_leads_synced": totals[9],
             "instantly_active_campaigns": totals[10],
             "instantly_auto_launch_enabled": settings.instantly_auto_launch and settings.send_mode == "live",
-            "activity": totals[11]}
+            "activity": totals[11], "latest_run": totals[12]}

@@ -19,6 +19,7 @@ from app.routers.approvals import router as approvals_router
 from app.routers.dashboard import router as dashboard_router
 from app.routers.lead_replies import router as lead_replies_router
 from app.routers.suppressions import router as suppressions_router
+from app.routers.instantly_accounts import router as instantly_accounts_router
 from app.services.campaign_queue_worker import run_campaign_queue_worker
 from app.services.instantly_sync_worker import run_instantly_sync_worker
 from app.services.instantly_replies_worker import run_instantly_replies_worker
@@ -59,6 +60,7 @@ def create_app(*, auth_enabled: bool = True, queue_worker_enabled: bool = False)
     app.include_router(dashboard_router)
     app.include_router(lead_replies_router)
     app.include_router(suppressions_router)
+    app.include_router(instantly_accounts_router)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=[settings.frontend_origin],

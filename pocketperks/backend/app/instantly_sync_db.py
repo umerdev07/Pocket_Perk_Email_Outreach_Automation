@@ -59,7 +59,7 @@ async def create_campaign_mapping(settings: Settings, run_id: str) -> dict:
 
 
 async def update_campaign_mapping(settings: Settings, mapping_id: str, values: dict) -> dict:
-    allowed = {"instantly_campaign_id", "status", "error_detail"}
+    allowed = {"instantly_campaign_id", "status", "error_detail", "sender_account_emails"}
     if not values or set(values) - allowed:
         raise ValueError("Only provider campaign ID, status, and safe error detail can be updated.")
     values = {**values, "updated_at": datetime.now(UTC).isoformat()}
@@ -73,6 +73,40 @@ async def update_campaign_mapping(settings: Settings, mapping_id: str, values: d
     if not rows:
         raise HTTPException(status_code=404, detail="Instantly campaign mapping not found.")
     return rows[0]
+
+
+async def get_campaign_mapping_for_run(settings: Settings, run_id: str) -> dict | None:
+    async with httpx.AsyncClient(timeout=20) as client:
+        response = await client.get(f"{_base(settings)}/instantly_campaign_mappings", params={
+            "select": "id,run_id,instantly_campaign_id,status,error_detail,sender_account_emails",
+            "run_id": f"eq.{run_id}", "limit": "1",
+        }, headers=_headers(settings))
+    rows = await _checked(response, "Could not load the Instantly campaign mapping.")
+    return rows[0] if rows else None
+
+
+async def load_scheduled_campaign_windows(settings: Settings) -> list[dict]:
+    """Load scheduled mappings with their app-owned start/end timestamps."""
+    base = _base(settings)
+    async with httpx.AsyncClient(timeout=25) as client:
+        mappings = await _checked(await client.get(f"{base}/instantly_campaign_mappings", params={
+            "select": "id,run_id,instantly_campaign_id,sender_account_emails",
+            "status": "eq.scheduled", "limit": "100",
+        }, headers=_headers(settings)), "Could not load scheduled Instantly campaigns.")
+        results = []
+        for mapping in mappings:
+            runs = await _checked(await client.get(f"{base}/campaign_runs", params={
+                "select": "campaign_id,campaigns(start_at,end_at)",
+                "id": f"eq.{mapping['run_id']}", "limit": "1",
+            }, headers=_headers(settings)), "Could not load a scheduled campaign window.")
+            if not runs:
+                continue
+            campaign = runs[0].get("campaigns") or {}
+            if isinstance(campaign, list):
+                campaign = campaign[0] if campaign else {}
+            results.append({**mapping, "start_at": campaign.get("start_at"),
+                            "end_at": campaign.get("end_at")})
+    return results
 
 
 async def save_lead_mappings(settings: Settings, mapping_id: str, rows: list[dict]) -> int:
@@ -221,3 +255,27 @@ async def load_active_campaign_windows(settings: Settings, *, limit: int = 100) 
         if isinstance(campaign, dict) and isinstance(campaign.get("end_at"), str):
             result.append({**mapping, "end_at": campaign["end_at"]})
     return result
+
+
+async def load_active_runs_with_pending_leads(settings: Settings, *, limit: int = 100) -> list[str]:
+    """Find active runs that still have a locally pending lead mapping.
+
+    This is a recovery path for a reviewed email whose queue notification was
+    delayed, archived, or missed while the worker/backend was restarting.
+    """
+    base = _base(settings)
+    async with httpx.AsyncClient(timeout=25) as client:
+        active = await _checked(await client.get(f"{base}/instantly_campaign_mappings", params={
+            "select": "id,run_id", "status": "eq.active", "instantly_campaign_id": "not.is.null",
+            "order": "updated_at.asc", "limit": str(limit),
+        }, headers=_headers(settings)), "Could not load active Instantly campaigns for recovery.")
+        active_ids = [str(row["id"]) for row in active if row.get("id")]
+        if not active_ids:
+            return []
+        pending = await _checked(await client.get(f"{base}/instantly_lead_mappings", params={
+            "select": "campaign_mapping_id", "campaign_mapping_id": f"in.({','.join(active_ids)})",
+            "status": "eq.pending", "limit": "5000",
+        }, headers=_headers(settings)), "Could not load active Instantly campaigns for recovery.")
+    pending_ids = {str(row["campaign_mapping_id"]) for row in pending if row.get("campaign_mapping_id")}
+    return list(dict.fromkeys(str(row["run_id"]) for row in active
+                               if row.get("run_id") and str(row.get("id")) in pending_ids))

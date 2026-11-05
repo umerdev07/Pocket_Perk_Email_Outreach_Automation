@@ -13,8 +13,7 @@ from app.instantly_sync_db import (create_campaign_mapping, get_lead_mapping_sta
                                    save_lead_mappings, update_campaign_mapping)
 from app.integrations.instantly_client import (BadResponseError, InstantlyError,
                                                InstantlyTimeoutError, InstantlyWriteError,
-                                               activate_campaign, add_campaign_leads,
-                                               create_campaign)
+                                               add_campaign_leads, create_campaign)
 from app.suppression_db import get_suppressed_emails
 
 INSTANTLY_SCHEDULE_TIMEZONE = "Asia/Karachi"
@@ -277,47 +276,13 @@ async def sync_completed_run(settings: Settings, run_id: str) -> dict[str, Any]:
     if provider_campaign_was_active:
         result["launch"] = "already_active"
         return result
-    if not settings.instantly_auto_launch:
-        result["launch"] = "disabled_by_configuration"
-        return result
-    if settings.send_mode != "live":
-        result["launch"] = "disabled_in_test_mode"
-        return result
     if counts["synced"] < 1:
         await update_campaign_mapping(settings, mapping["id"], {
-            "status": "failed", "error_detail": "Auto-launch was held because no eligible leads synced to Instantly.",
+            "status": "failed", "error_detail": "No eligible leads synced to Instantly.",
         })
         result["launch"] = "held_no_eligible_leads"
         return result
-
-    start_at = _aware_datetime(campaign.get("start_at"), "start")
-    end_at = _aware_datetime(campaign.get("end_at"), "end")
-    now = datetime.now(UTC)
-    if end_at <= now or end_at <= start_at:
-        await update_campaign_mapping(settings, mapping["id"], {
-            "status": "failed", "error_detail": "Auto-launch was held because the campaign time window has expired or is invalid.",
-        })
-        result["launch"] = "held_invalid_window"
-        return result
-    if start_at > now:
-        result["launch"] = "scheduled"
-        result["launch_deferred_until"] = start_at.isoformat()
-        return result
-
-    await update_campaign_mapping(settings, mapping["id"], {
-        "status": "launching", "error_detail": "Activation submitted; reconcile status if backend restarts before confirmation.",
-    })
-    try:
-        await activate_campaign(str(provider_campaign_id), settings)
-    except InstantlyError as exc:
-        outcome_unknown = (isinstance(exc, (InstantlyTimeoutError, BadResponseError))
-                           or isinstance(exc, InstantlyWriteError) and exc.outcome_unknown)
-        detail = ("Campaign activation outcome is unknown; check Instantly before retrying."
-                  if outcome_unknown else f"Instantly campaign activation failed: {str(exc)}")
-        await update_campaign_mapping(settings, mapping["id"], {
-            "status": "launching" if outcome_unknown else "failed", "error_detail": detail[:240],
-        })
-        raise RuntimeError(detail) from exc
-    await update_campaign_mapping(settings, mapping["id"], {"status": "active", "error_detail": None})
-    result["launch"] = "active"
+    # Sender accounts are chosen by an operator in PocketPerks after sync.
+    # Keep the provider campaign inactive until that choice is saved.
+    result["launch"] = "awaiting_sender_selection"
     return result

@@ -9,6 +9,7 @@ from fastapi import HTTPException
 from app.config import Settings
 from app.queue_db import (archive_instantly_sync_job, extend_instantly_sync_job,
                           read_instantly_sync_jobs)
+from app.instantly_sync_db import load_active_runs_with_pending_leads
 from app.instantly_sync_service import sync_completed_run
 
 logger = logging.getLogger(__name__)
@@ -16,6 +17,7 @@ LEASE_SECONDS = 300
 LEASE_REFRESH_SECONDS = 45
 POLL_SECONDS = 4
 MAX_ATTEMPTS = 3
+RECOVERY_INTERVAL_SECONDS = 60
 
 
 async def _keep_lease(settings: Settings, message_id: int) -> None:
@@ -81,11 +83,27 @@ async def _consume(settings: Settings, job: dict) -> None:
 
 async def run_instantly_sync_worker(settings: Settings) -> None:
     """Poll PGMQ; keep queued work untouched until the API key is configured."""
+    next_recovery_at = 0.0
     while True:
         try:
             if not settings.instantly_api_key:
                 await asyncio.sleep(POLL_SECONDS)
                 continue
+
+            now = asyncio.get_running_loop().time()
+            if now >= next_recovery_at:
+                next_recovery_at = now + RECOVERY_INTERVAL_SECONDS
+                run_ids = await load_active_runs_with_pending_leads(settings)
+                for run_id in run_ids:
+                    try:
+                        result = await sync_completed_run(settings, run_id)
+                        if result.get("synced", 0):
+                            logger.info("Instantly recovery synced pending leads for active run %s (synced=%s).",
+                                        run_id, result["synced"])
+                    except Exception as exc:
+                        logger.warning("Instantly recovery will retry active run %s after %s.",
+                                       run_id, type(exc).__name__)
+
             jobs = await read_instantly_sync_jobs(settings, visibility_seconds=LEASE_SECONDS, quantity=1)
             if not jobs:
                 await asyncio.sleep(POLL_SECONDS)

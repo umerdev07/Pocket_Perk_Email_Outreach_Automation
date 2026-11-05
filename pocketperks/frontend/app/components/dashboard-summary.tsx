@@ -17,6 +17,20 @@ type Summary = {
   instantly_leads_synced: number;
   instantly_active_campaigns: number;
   instantly_auto_launch_enabled: boolean;
+  latest_run: {
+    run_id: string;
+    campaign_name: string;
+    status: string;
+    total_leads: number;
+    processed: number;
+    skipped: number;
+    failed_leads: number;
+    queued_emails: number;
+    sent_emails: number;
+    failed_emails: number;
+    pending_review_emails: number;
+    created_at: string;
+  } | null;
   activity: {
     available?: boolean;
     days: { date: string; leads: number; replies: number }[];
@@ -114,6 +128,21 @@ export default function DashboardSummary({ apiBase, refreshKey, onNavigate }: Pr
           </article>
         ))}
       </div>
+      {summary?.latest_run && <article className="dashboard-chart-card latest-run-card">
+        <div className="dashboard-chart-heading"><div>
+          <h3>Latest campaign run</h3>
+          <p>{summary.latest_run.campaign_name} · {new Date(summary.latest_run.created_at).toLocaleString()}</p>
+        </div><span className={`badge ${summary.latest_run.status}`}>{formatStatus(summary.latest_run.status)}</span></div>
+        <div className="latest-run-metrics">
+          <div><small>Leads processed</small><b>{summary.latest_run.processed} / {summary.latest_run.total_leads}</b></div>
+          <div><small>Queued for Instantly</small><b>{summary.latest_run.queued_emails}</b></div>
+          <div><small>Provider-confirmed sent</small><b>{summary.latest_run.sent_emails}</b></div>
+          <div><small>Needs review</small><b>{summary.latest_run.pending_review_emails}</b></div>
+          {summary.latest_run.failed_emails + summary.latest_run.failed_leads > 0 &&
+            <div className="latest-run-warning"><small>Failed</small><b>{summary.latest_run.failed_emails + summary.latest_run.failed_leads}</b></div>}
+        </div>
+        <small className="latest-run-note">These counts are only for this run. Older campaign sends remain in the workspace totals above.</small>
+      </article>}
       {summary && <div className="dashboard-charts">
         <article className="dashboard-chart-card activity-chart-card">
           <div className="dashboard-chart-heading"><div><h3>Workspace activity</h3><p>Imported leads and received replies over time</p></div>

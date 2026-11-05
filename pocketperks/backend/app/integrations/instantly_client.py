@@ -352,6 +352,30 @@ async def create_campaign(payload: dict[str, Any], settings: Settings | None = N
             "status": result.get("status", "draft")}
 
 
+async def set_campaign_sending_accounts(campaign_id: str, emails: list[str],
+                                        settings: Settings | None = None) -> None:
+    """Replace a draft/active campaign's sender list with selected workspace accounts."""
+    config = settings or get_settings()
+    try:
+        UUID(campaign_id)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("A valid Instantly campaign ID is required.") from exc
+    if not emails or any(not isinstance(email, str) or not email.strip() for email in emails):
+        raise ValueError("Select at least one valid sending account.")
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as session:
+            response = await session.patch(
+                f"{CAMPAIGNS_URL}/{campaign_id}", headers=_write_headers(config),
+                json={"email_list": list(dict.fromkeys(email.strip().lower() for email in emails))},
+            )
+    except httpx.TimeoutException as exc:
+        raise InstantlyTimeoutError("Instantly sender assignment timed out; check campaign settings before retrying.") from exc
+    except httpx.HTTPError as exc:
+        raise InstantlyRequestError("Could not communicate with Instantly while assigning campaign senders.") from exc
+    if not response.is_success:
+        _write_error(response, "campaign sender assignment")
+
+
 async def activate_campaign(campaign_id: str, settings: Settings | None = None) -> dict[str, Any]:
     """Activate one fully synced campaign; the caller must enforce send-mode and timing gates."""
     config = settings or get_settings()

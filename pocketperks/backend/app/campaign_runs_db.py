@@ -1,4 +1,6 @@
 """Database operations for starting a campaign run."""
+import asyncio
+
 import httpx
 from fastapi import HTTPException
 
@@ -77,3 +79,49 @@ async def get_campaign_run(settings: Settings, run_id: str) -> dict | None:
             "skipped": row["skipped"], "failed": row["failed"], "created_at": row["created_at"],
             "finished_at": row["finished_at"], "error_detail": row.get("error_detail"),
             "failure_log": row.get("failure_log") or []}
+
+
+async def get_campaign_run_instantly_status(settings: Settings, run_id: str) -> dict:
+    """Return provider sync/launch state for the run without inferring a send."""
+    base = _base(settings)
+    async with httpx.AsyncClient(timeout=20) as client:
+        response = await client.get(f"{base}/instantly_campaign_mappings", params={
+            "select": "id,instantly_campaign_id,status,error_detail,sender_account_emails,updated_at",
+            "run_id": f"eq.{run_id}", "limit": "1",
+        }, headers=_headers(settings))
+        if not response.is_success:
+            raise HTTPException(status_code=503, detail="Could not load Instantly sync status.")
+        rows = response.json()
+        if not isinstance(rows, list):
+            raise HTTPException(status_code=503, detail="Instantly sync status response was invalid.")
+        if not rows:
+            return {"run_id": run_id, "status": "waiting", "instantly_campaign_id": None,
+                    "synced_leads": 0, "pending_leads": 0, "failed_leads": 0, "skipped_leads": 0,
+                    "error_detail": None, "sender_account_emails": []}
+        mapping = rows[0]
+        mapping_id = str(mapping["id"])
+        counts = await asyncio.gather(*[
+            _count_run_lead_mappings(client, base, settings, mapping_id, status)
+            for status in ("synced", "pending", "failed", "skipped", "unknown")
+        ])
+    return {"run_id": run_id, "status": mapping.get("status", "pending"),
+            "instantly_campaign_id": mapping.get("instantly_campaign_id"),
+            "synced_leads": counts[0], "pending_leads": counts[1], "failed_leads": counts[2],
+            "skipped_leads": counts[3], "unknown_leads": counts[4],
+            "error_detail": mapping.get("error_detail"),
+            "sender_account_emails": mapping.get("sender_account_emails") or [],
+            "updated_at": mapping.get("updated_at")}
+
+
+async def _count_run_lead_mappings(client, base: str, settings: Settings,
+                                   mapping_id: str, status: str) -> int:
+    response = await client.get(f"{base}/instantly_lead_mappings", params={
+        "select": "id", "campaign_mapping_id": f"eq.{mapping_id}",
+        "status": f"eq.{status}", "limit": "1",
+    }, headers={**_headers(settings), "Prefer": "count=exact"})
+    if not response.is_success:
+        raise HTTPException(status_code=503, detail="Could not load Instantly lead sync counts.")
+    try:
+        return int(response.headers["content-range"].rsplit("/", 1)[1])
+    except (KeyError, IndexError, ValueError) as exc:
+        raise HTTPException(status_code=503, detail="Database did not return exact Instantly lead counts.") from exc
