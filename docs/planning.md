@@ -494,3 +494,6 @@ Koi fake business data repo mein nahi. Testing ke liye user apni asli (ya sample
 - Added migration 020 for active/released suppression state and an event audit table; it backfills the existing suppression list. Backend RPCs make suppression/reactivation and audited admin release atomic.
 - Admins can inspect the global suppression list and recent history in Lead Replies. A release requires explicit recipient re-consent plus an audit reason; it only removes the global send block and does not add the address to an already active Instantly campaign. Operators/reviewers cannot access these controls.
 - Next: apply migration 020 in Supabase, then rebuild/restart the backend and redeploy the frontend. Verify automatic STOP suppression and admin re-consent release with controlled test addresses before any live campaign. Tests/build were not run for this update.
+
+### Suppression release RPC correction
+- Migration 021 fixes a PL/pgSQL name collision in the audited suppression release function introduced by migration 020. Apply it after migration 020, then restart the backend before retrying the admin release action.

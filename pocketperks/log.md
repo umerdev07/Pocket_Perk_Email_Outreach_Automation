@@ -248,3 +248,7 @@ This log records completed work and verification reported in this project chat. 
 - Clear opt-out replies remain automatically suppressed. Admins can view active and released addresses and recent history from Lead Replies. Releasing requires an explicit recipient re-consent confirmation and a reason; the backend records the acting admin and the release does not re-add the address to an active Instantly campaign.
 - Suppression controls are admin-only in both the UI and API. Active suppression checks remain fail-closed, so database/migration errors block affected sends rather than silently allowing them.
 - Apply migration 020 in Supabase before restarting the backend. Then rebuild/restart the backend and redeploy the frontend. Verification tests/build have not been run in this change; do not release suppressed contacts without documented recipient consent.
+
+## Suppression release RPC correction
+- Added migration `021_fix_suppression_release_rpc.sql` to avoid the PL/pgSQL argument/column name collision that could make an admin release fail. It replaces only the release RPC and preserves the same service-role-only signature used by the backend.
+- Apply migration 021 in Supabase after 020, then restart the backend. Retest the email from Lead Replies; it should show as released and disappear from the active suppression indicator. The re-consent checkbox and audit reason remain required.
