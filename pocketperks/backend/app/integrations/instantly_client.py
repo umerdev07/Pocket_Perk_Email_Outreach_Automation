@@ -20,6 +20,7 @@ ACCOUNTS_URL = "https://api.instantly.ai/api/v2/accounts"
 CAMPAIGNS_URL = "https://api.instantly.ai/api/v2/campaigns"
 EMAILS_URL = "https://api.instantly.ai/api/v2/emails"
 ADD_LEADS_URL = "https://api.instantly.ai/api/v2/leads/add"
+LIST_LEADS_URL = "https://api.instantly.ai/api/v2/leads/list"
 PAGE_SIZE = 100
 MAX_LEADS_PER_REQUEST = 1000
 MAX_RETRIES = 2
@@ -484,3 +485,50 @@ async def add_campaign_leads(campaign_id: str, leads: list[dict[str, Any]],
     return {"attempted": len(leads), "created": len(created_leads), "skipped": skipped,
             "invalid": invalid, "blocked": blocked, "duplicates": duplicates,
             "batches": batches, "created_leads": created_leads}
+
+
+async def list_campaign_leads(campaign_id: str, emails: list[str],
+                              settings: Settings | None = None) -> dict[str, str]:
+    """Read back campaign leads for safe reconciliation after an ambiguous write.
+
+    Instantly requires the leads:read scope for this endpoint. Keep each lookup
+    bounded to 100 contacts, its documented maximum, and return only email IDs.
+    """
+    config = settings or get_settings()
+    try:
+        UUID(campaign_id)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("A valid Instantly campaign ID is required.") from exc
+    contacts = list(dict.fromkeys(email.strip().lower() for email in emails
+                                  if isinstance(email, str) and email.strip()))
+    if not contacts:
+        return {}
+    if len(contacts) > 100:
+        raise ValueError("Instantly lead reconciliation supports at most 100 contacts per lookup.")
+    headers = _write_headers(config)
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as session:
+            response = await session.post(LIST_LEADS_URL, headers=headers, json={
+                "campaign": campaign_id, "contacts": contacts, "limit": 100,
+            })
+    except httpx.TimeoutException as exc:
+        raise InstantlyTimeoutError("Instantly lead reconciliation timed out; no leads were resent.") from exc
+    except httpx.HTTPError as exc:
+        raise InstantlyRequestError("Could not read campaign leads from Instantly for reconciliation.") from exc
+    if not response.is_success:
+        _write_error(response, "lead reconciliation (leads:read permission required)")
+    try:
+        payload = response.json()
+    except (ValueError, TypeError) as exc:
+        raise BadResponseError("Instantly returned invalid JSON for campaign lead reconciliation.") from exc
+    if not isinstance(payload, dict) or not isinstance(payload.get("items"), list):
+        raise BadResponseError("Instantly returned an unexpected campaign lead list.")
+    requested = set(contacts)
+    found: dict[str, str] = {}
+    for item in payload["items"]:
+        if not isinstance(item, dict):
+            raise BadResponseError("Instantly returned an invalid campaign lead entry.")
+        email, lead_id = item.get("email"), item.get("id")
+        if isinstance(email, str) and email.strip().lower() in requested and isinstance(lead_id, str) and lead_id:
+            found[email.strip().lower()] = lead_id
+    return found

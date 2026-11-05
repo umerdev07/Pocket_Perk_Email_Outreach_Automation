@@ -130,3 +130,23 @@ async def delete_lead_batch(settings: Settings, batch_id: str) -> None:
         raise HTTPException(status_code=409, detail="This batch has a campaign run in progress. Wait for it to finish before deleting.")
     if result.get("deleted") is not True:
         raise HTTPException(status_code=503, detail="Lead batch deletion could not be confirmed.")
+
+
+async def preview_lead_batch_cleanup(settings: Settings, batch_id: str) -> dict:
+    if not settings.supabase_url or not settings.supabase_service_key:
+        raise HTTPException(status_code=503, detail="Database is not configured for lead batches.")
+    key = settings.supabase_service_key
+    async with httpx.AsyncClient(timeout=20) as client:
+        response = await client.post(
+            f"{settings.supabase_url.rstrip('/')}/rest/v1/rpc/preview_lead_batch_cleanup",
+            headers={"apikey": key, "Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+            json={"target_batch_id": batch_id},
+        )
+    if not response.is_success:
+        raise HTTPException(status_code=503, detail="Could not preview this activity cleanup.")
+    result = response.json()
+    if isinstance(result, list):
+        result = result[0] if result else {}
+    if not isinstance(result, dict) or result.get("found") is not True:
+        raise HTTPException(status_code=404, detail="Import batch not found.")
+    return result

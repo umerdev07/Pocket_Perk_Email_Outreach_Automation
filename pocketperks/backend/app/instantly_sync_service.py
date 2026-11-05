@@ -13,7 +13,8 @@ from app.instantly_sync_db import (create_campaign_mapping, get_lead_mapping_sta
                                    save_lead_mappings, update_campaign_mapping)
 from app.integrations.instantly_client import (BadResponseError, InstantlyError,
                                                InstantlyTimeoutError, InstantlyWriteError,
-                                               activate_campaign, add_campaign_leads, create_campaign)
+                                               activate_campaign, add_campaign_leads, create_campaign,
+                                               list_campaign_leads)
 from app.suppression_db import get_suppressed_emails
 
 INSTANTLY_SCHEDULE_TIMEZONE = "Asia/Karachi"
@@ -141,10 +142,11 @@ def _aware_datetime(value: Any, label: str) -> datetime:
 
 
 async def sync_completed_run(settings: Settings, run_id: str) -> dict[str, Any]:
-    """Create/sync a provider draft; activate only with both explicit runtime gates.
+    """Create, sync and activate only after sender, data and schedule checks pass.
 
-    Provider writes are never retried here when their result may be ambiguous.
-    Existing `unknown` mappings require manual reconciliation before retry.
+    Lead writes are chunked and their provider IDs are persisted independently.
+    If a write response is ambiguous, read the campaign back before considering
+    another write; an unavailable read leaves only that bounded chunk unknown.
     """
     context = await load_sync_run_context(settings, run_id)
     run, campaign = context["run"], context["campaign"]
@@ -168,7 +170,15 @@ async def sync_completed_run(settings: Settings, run_id: str) -> dict[str, Any]:
     if mapping.get("status") == "completed":
         return {"run_id": run_id, "instantly_campaign_id": provider_campaign_id,
                 "synced": 0, "skipped": 0, "failed": 0, "unknown": 0, "launch": "completed"}
-    if mapping.get("status") == "failed":
+    retryable_sync_failure = (
+        mapping.get("status") == "failed"
+        and bool(provider_campaign_id)
+        and mapping.get("error_detail") in {
+            "Some provider lead outcomes need reconciliation; those leads will not be resent.",
+            "Some provider lead outcomes need reconciliation; they will be checked before retry.",
+        }
+    )
+    if mapping.get("status") == "failed" and not retryable_sync_failure:
         raise RuntimeError("Instantly campaign mapping is failed; reconcile provider state before retrying.")
     if not provider_campaign_id:
         if mapping.get("status") == "failed":
@@ -204,7 +214,7 @@ async def sync_completed_run(settings: Settings, run_id: str) -> dict[str, Any]:
         })
 
     counts = {"synced": 0, "skipped": 0, "failed": 0, "unknown": 0}
-    offset, page_size = 0, 500
+    offset, page_size, provider_batch_size = 0, 500, 100
     step_count = len(campaign["steps"])
     while True:
         leads = await load_sync_lead_page(settings, run_id, str(run["batch_id"]),
@@ -221,7 +231,7 @@ async def sync_completed_run(settings: Settings, run_id: str) -> dict[str, Any]:
         suppressed_mapping_rows: list[dict] = []
         for lead in leads:
             previous = states.get(str(lead["id"]))
-            if previous and previous.get("status") in {"synced", "skipped", "unknown", "failed"}:
+            if previous and previous.get("status") in {"synced", "skipped", "failed"}:
                 counts[previous["status"]] += 1
                 continue
             if str(lead.get("email") or "").strip().lower() in suppressed_emails:
@@ -258,22 +268,91 @@ async def sync_completed_run(settings: Settings, run_id: str) -> dict[str, Any]:
                 "status": "active" if provider_campaign_was_active else "syncing_leads",
                 "error_detail": None,
             })
-            result = await add_campaign_leads(provider_campaign_id, candidates, settings)
-            returned = {int(item["index"]): item["id"] for item in result.get("created_leads", [])}
-            resolved = []
-            for index, row in enumerate(mapping_rows):
-                provider_id = returned.get(index)
-                if provider_id:
-                    resolved.append({"lead_id": row["lead_id"], "status": "synced",
-                                     "instantly_lead_id": provider_id,
-                                     "synced_at": datetime.now(UTC).isoformat(),
-                                     "error_detail": None})
-                    counts["synced"] += 1
-                else:
-                    resolved.append({"lead_id": row["lead_id"], "status": "skipped",
-                                     "instantly_lead_id": None, "error_detail": "Instantly skipped this lead during validation or deduplication."})
-                    counts["skipped"] += 1
-            await save_lead_mappings(settings, mapping["id"], resolved)
+            for batch_start in range(0, len(candidates), provider_batch_size):
+                batch_candidates = candidates[batch_start:batch_start + provider_batch_size]
+                batch_rows = mapping_rows[batch_start:batch_start + provider_batch_size]
+                batch_emails = [item["email"] for item in batch_candidates]
+                previously_unknown = [item["email"] for item, row in zip(batch_candidates, batch_rows)
+                                      if states.get(str(row["lead_id"]), {}).get("status") == "unknown"]
+                found: dict[str, str] = {}
+                if previously_unknown:
+                    try:
+                        found = await list_campaign_leads(provider_campaign_id, previously_unknown, settings)
+                    except InstantlyError:
+                        # An unavailable read scope or transient read error must
+                        # never cause an uncertain lead to be posted again.
+                        counts["unknown"] += len(previously_unknown)
+                        continue
+
+                resolved_by_email: dict[str, dict] = {}
+                pending: list[tuple[dict, dict]] = []
+                for item, row in zip(batch_candidates, batch_rows):
+                    email = item["email"].strip().lower()
+                    provider_id = found.get(email)
+                    if provider_id:
+                        resolved_by_email[email] = {
+                            "lead_id": row["lead_id"], "status": "synced",
+                            "instantly_lead_id": provider_id,
+                            "synced_at": datetime.now(UTC).isoformat(), "error_detail": None,
+                        }
+                        counts["synced"] += 1
+                    else:
+                        pending.append((item, row))
+
+                if pending:
+                    try:
+                        result = await add_campaign_leads(
+                            provider_campaign_id, [item for item, _ in pending], settings)
+                    except InstantlyError as exc:
+                        pending_emails = [item["email"].strip().lower() for item, _ in pending]
+                        reconciled: dict[str, str] = {}
+                        try:
+                            reconciled = await list_campaign_leads(provider_campaign_id, pending_emails, settings)
+                        except InstantlyError:
+                            pass
+                        for item, row in pending:
+                            email = item["email"].strip().lower()
+                            provider_id = reconciled.get(email)
+                            if provider_id:
+                                resolved_by_email[email] = {
+                                    "lead_id": row["lead_id"], "status": "synced",
+                                    "instantly_lead_id": provider_id,
+                                    "synced_at": datetime.now(UTC).isoformat(), "error_detail": None,
+                                }
+                                counts["synced"] += 1
+                            elif getattr(exc, "outcome_unknown", False):
+                                resolved_by_email[email] = {
+                                    "lead_id": row["lead_id"], "status": "unknown",
+                                    "error_detail": "Instantly did not confirm this lead; it will be checked before any retry.",
+                                }
+                                counts["unknown"] += 1
+                            else:
+                                resolved_by_email[email] = {
+                                    "lead_id": row["lead_id"], "status": "failed",
+                                    "error_detail": f"Instantly rejected this lead batch: {type(exc).__name__}.",
+                                }
+                                counts["failed"] += 1
+                    else:
+                        returned = {int(item["index"]): item["id"]
+                                    for item in result.get("created_leads", [])}
+                        for index, (item, row) in enumerate(pending):
+                            email = item["email"].strip().lower()
+                            provider_id = returned.get(index)
+                            if provider_id:
+                                resolved_by_email[email] = {
+                                    "lead_id": row["lead_id"], "status": "synced",
+                                    "instantly_lead_id": provider_id,
+                                    "synced_at": datetime.now(UTC).isoformat(), "error_detail": None,
+                                }
+                                counts["synced"] += 1
+                            else:
+                                resolved_by_email[email] = {
+                                    "lead_id": row["lead_id"], "status": "skipped",
+                                    "instantly_lead_id": None,
+                                    "error_detail": "Instantly accepted the batch but skipped this lead during validation or deduplication.",
+                                }
+                                counts["skipped"] += 1
+                await save_lead_mappings(settings, mapping["id"], list(resolved_by_email.values()))
         offset += len(leads)
         if len(leads) < page_size:
             break
@@ -281,7 +360,7 @@ async def sync_completed_run(settings: Settings, run_id: str) -> dict[str, Any]:
     unresolved = counts["unknown"] + counts["failed"]
     await update_campaign_mapping(settings, mapping["id"], {
         "status": "active" if provider_campaign_was_active else "failed" if unresolved else "leads_synced",
-        "error_detail": "Some provider lead outcomes need reconciliation; those leads will not be resent."
+        "error_detail": "Some provider lead outcomes need reconciliation; they will be checked before retry."
         if unresolved else None,
     })
     result: dict[str, Any] = {"run_id": run_id, "instantly_campaign_id": provider_campaign_id, **counts}

@@ -10,7 +10,8 @@ from openpyxl import load_workbook
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 
 from app.config import Settings, get_settings
-from app.lead_batches_db import delete_lead_batch, get_batch_lead_personalized_emails, get_lead_batch_details
+from app.lead_batches_db import (delete_lead_batch, get_batch_lead_personalized_emails,
+                                get_lead_batch_details, preview_lead_batch_cleanup)
 from app.suppression_db import get_suppressed_emails
 
 router = APIRouter(prefix="/api/leads", tags=["leads"])
@@ -35,6 +36,11 @@ FIELD_KEYS = ("business_name", "business_category", "email", "phone", "website",
 @batch_router.delete("/api/lead-batches/{batch_id}", status_code=204)
 async def delete_lead_batch_endpoint(batch_id: UUID, settings: Settings = Depends(get_settings)):
     await delete_lead_batch(settings, str(batch_id))
+
+
+@batch_router.get("/api/lead-batches/{batch_id}/cleanup-preview")
+async def lead_batch_cleanup_preview(batch_id: UUID, settings: Settings = Depends(get_settings)):
+    return await preview_lead_batch_cleanup(settings, str(batch_id))
 
 
 @batch_router.get("/api/lead-batches/{batch_id}/details")
