@@ -65,6 +65,20 @@ async def list_replies(settings: Settings, *, limit: int = 100, offset: int = 0)
             "order": "received_at.desc", "limit": limit, "offset": offset,
         }, headers=_headers(settings))
     rows = _rows(response, "Could not load lead replies.")
+    # Reconcile clear opt-outs in already-saved replies too. The reply sync
+    # cursor may have advanced before opt-out detection was deployed.
+    existing_opt_outs = []
+    for row in rows:
+        lead = row.get("leads") if isinstance(row.get("leads"), dict) else {}
+        address = normalize_email(lead.get("email") or row.get("from_email"))
+        body = row.get("body") if isinstance(row.get("body"), str) else ""
+        if address and _explicit_opt_out(body):
+            existing_opt_outs.append({
+                "email": address, "source": "reply_auto",
+                "reason": "Recipient explicitly requested no further email.",
+                "lead_id": row.get("lead_id"), "campaign_id": row.get("campaign_id"),
+            })
+    await save_suppressions(settings, existing_opt_outs)
     addresses = {str((row.get("leads") or {}).get("email") or row.get("from_email") or "") for row in rows}
     suppressed = await get_suppressed_emails(settings, addresses)
     for row in rows:

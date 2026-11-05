@@ -202,7 +202,8 @@ export default function LeadReplies({ apiBase }: Props) {
               <span className="reply-main"><b>{reply.leads?.business_name || reply.from_email}</b>
                 <small>{reply.from_email}{reply.campaigns?.name ? ` · ${reply.campaigns.name}` : ""}</small>
                 <strong>{reply.subject || "(no subject)"}</strong>
-                <span>{(cleanBody || "No new text detected; quoted email available below.").replace(/\s+/g, " ").slice(0, 180)}</span></span>
+                <span>{(cleanBody || "No new text detected; quoted email available below.").replace(/\s+/g, " ").slice(0, 180)}</span>
+                {reply.opted_out && <small className="reply-opt-out-badge">Suppressed · future campaign sync blocked</small>}</span>
               <time dateTime={reply.received_at}>{new Date(reply.received_at).toLocaleString()}</time>
             </button>
             {expanded && <div className="reply-expanded"><div className="reply-meta"><span>From <b>{reply.from_email}</b></span>
