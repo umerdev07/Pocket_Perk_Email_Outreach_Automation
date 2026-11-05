@@ -7,7 +7,8 @@ from app.campaign_runs_db import (get_campaign_run, get_campaign_run_instantly_s
                                   start_campaign_run)
 from app.config import Settings, get_settings
 from app.personalization_db import get_run_lead_personalized_emails, get_run_personalized_emails
-from app.instantly_sender_service import assign_senders_and_continue
+from app.instantly_sender_service import assign_senders_and_continue, is_sending_account_ready
+from app.integrations.instantly_client import InstantlyError, list_sending_accounts
 from app.services.personalization_service import process_campaign_run
 
 router = APIRouter(prefix="/api/campaigns", tags=["campaign runs"])
@@ -16,6 +17,7 @@ runs_router = APIRouter(prefix="/api/campaign-runs", tags=["campaign runs"])
 
 class StartCampaignRequest(BaseModel):
     batch_id: UUID
+    sender_emails: list[str] = Field(min_length=1, max_length=10)
 
 
 class AssignSendersRequest(BaseModel):
@@ -29,7 +31,19 @@ async def start_campaign(campaign_id: UUID, payload: StartCampaignRequest, reque
     # The campaign_runs insert trigger enqueues this run transactionally in PGMQ.
     # The lifespan worker consumes it; closing this request or restarting the API
     # does not discard the queued job.
-    result = await start_campaign_run(settings, str(campaign_id), str(payload.batch_id))
+    selected = list(dict.fromkeys(email.strip().lower() for email in payload.sender_emails
+                                  if isinstance(email, str) and email.strip()))
+    if not selected:
+        raise HTTPException(status_code=422, detail="Select at least one sending inbox before starting.")
+    try:
+        accounts = await list_sending_accounts(settings)
+    except InstantlyError as exc:
+        raise HTTPException(status_code=502, detail=f"Could not verify Instantly sending inboxes: {exc}") from exc
+    available = {str(account.get("email", "")).strip().lower(): account
+                 for account in accounts if is_sending_account_ready(account)}
+    if any(email not in available for email in selected):
+        raise HTTPException(status_code=422, detail="Choose only active, connected Instantly sending inboxes.")
+    result = await start_campaign_run(settings, str(campaign_id), str(payload.batch_id), selected)
     # The factory's worker-disabled mode is reserved for isolated tests/local
     # embedding. The normal module app enables the durable PGMQ worker.
     if not request.app.state.queue_worker_enabled:

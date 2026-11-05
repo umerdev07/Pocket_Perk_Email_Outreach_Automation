@@ -32,11 +32,40 @@ async def create_campaign(settings: Settings, campaign: dict, contexts: list[str
 async def list_campaigns(settings: Settings) -> list[dict]:
     async with httpx.AsyncClient(timeout=15) as client:
         response = await client.get(f"{_base(settings)}/campaigns", params={
-            "select": "id,name,total_emails,start_date,end_date,start_at,end_at,status,created_at", "order": "created_at.desc",
+            "select": "id,name,total_emails,start_date,end_date,start_at,end_at,status,created_at,campaign_runs(id)", "order": "created_at.desc",
         }, headers=_headers(settings))
     if not response.is_success:
         raise HTTPException(status_code=503, detail="Could not load campaigns.")
-    return response.json()
+    campaigns = response.json()
+    for campaign in campaigns:
+        campaign["has_runs"] = bool(campaign.pop("campaign_runs", []))
+    return campaigns
+
+
+async def update_campaign(settings: Settings, campaign_id: str, campaign: dict,
+                          contexts: list[str]) -> dict:
+    async with httpx.AsyncClient(timeout=25) as client:
+        response = await client.post(
+            f"{_base(settings)}/rpc/update_campaign_with_steps",
+            headers=_headers(settings),
+            json={"target_campaign_id": campaign_id, "campaign_data": campaign,
+                  "step_contexts": contexts},
+        )
+    if not response.is_success:
+        raise HTTPException(status_code=503, detail="Could not save campaign changes.")
+    result = response.json()
+    if isinstance(result, list):
+        result = result[0] if result else {}
+    reason = result.get("reason")
+    if reason == "not_found":
+        raise HTTPException(status_code=404, detail="Campaign not found.")
+    if reason == "campaign_started":
+        raise HTTPException(status_code=409, detail="This campaign already has a run and can no longer be edited safely.")
+    if reason == "draft_generation_running":
+        raise HTTPException(status_code=409, detail="Campaign drafts are currently being generated. Wait for generation to finish before editing.")
+    if result.get("updated") is not True:
+        raise HTTPException(status_code=503, detail="Campaign update could not be confirmed.")
+    return result
 
 
 async def get_campaign(settings: Settings, campaign_id: str) -> dict | None:

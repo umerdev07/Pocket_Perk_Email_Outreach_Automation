@@ -21,7 +21,8 @@ def _headers(settings: Settings, prefer: str | None = None) -> dict[str, str]:
     return headers
 
 
-async def start_campaign_run(settings: Settings, campaign_id: str, batch_id: str) -> dict:
+async def start_campaign_run(settings: Settings, campaign_id: str, batch_id: str,
+                             sender_emails: list[str] | None = None) -> dict:
     """Validate both records and create a run; no lead processing happens here."""
     base = _base(settings)
     headers = _headers(settings)
@@ -52,6 +53,7 @@ async def start_campaign_run(settings: Settings, campaign_id: str, batch_id: str
             "batch_id": batch_id,
             "status": "running",
             "total_leads": total_leads,
+            **({"sender_account_emails": sender_emails} if sender_emails is not None else {}),
         })
         if getattr(run_response, "status_code", None) == 409:
             raise HTTPException(status_code=409,

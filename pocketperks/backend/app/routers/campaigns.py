@@ -4,7 +4,8 @@ from datetime import UTC, date, datetime, time
 from zoneinfo import ZoneInfo
 from uuid import UUID
 
-from app.campaigns_db import create_campaign, delete_campaign, delete_campaign_step, get_campaign, list_campaigns
+from app.campaigns_db import (create_campaign, delete_campaign, delete_campaign_step,
+                              get_campaign, list_campaigns, update_campaign)
 from app.config import Settings, get_settings
 
 router = APIRouter(prefix="/api/campaigns", tags=["campaigns"])
@@ -45,6 +46,10 @@ class CampaignCreate(BaseModel):
         return self
 
 
+class CampaignUpdate(CampaignCreate):
+    """Full replacement of editable campaign setup before its first run."""
+
+
 def _resolve_london_local_time(value: datetime, zone: ZoneInfo) -> datetime:
     """Interpret datetime-local form values as UK time and reject DST gaps/folds."""
     candidate = value.replace(tzinfo=zone)
@@ -67,6 +72,13 @@ async def create_campaign_endpoint(payload: CampaignCreate, settings: Settings =
 @router.get("")
 async def list_campaigns_endpoint(settings: Settings = Depends(get_settings)):
     return await list_campaigns(settings)
+
+
+@router.patch("/{campaign_id}")
+async def update_campaign_endpoint(campaign_id: UUID, payload: CampaignUpdate,
+                                   settings: Settings = Depends(get_settings)):
+    campaign = payload.model_dump(mode="json", exclude={"contexts"})
+    return await update_campaign(settings, str(campaign_id), campaign, payload.contexts)
 
 
 @router.get("/{campaign_id}")

@@ -13,14 +13,15 @@ from app.instantly_sync_db import (create_campaign_mapping, get_lead_mapping_sta
                                    save_lead_mappings, update_campaign_mapping)
 from app.integrations.instantly_client import (BadResponseError, InstantlyError,
                                                InstantlyTimeoutError, InstantlyWriteError,
-                                               add_campaign_leads, create_campaign)
+                                               activate_campaign, add_campaign_leads, create_campaign)
 from app.suppression_db import get_suppressed_emails
 
 INSTANTLY_SCHEDULE_TIMEZONE = "Asia/Karachi"
 
 
 def build_campaign_payload(campaign: dict[str, Any], steps: list[dict[str, Any]], *,
-                           delay_hours: int = 4) -> dict[str, Any]:
+                           delay_hours: int = 4,
+                           sender_emails: list[str] | None = None) -> dict[str, Any]:
     """Build one inactive Instantly sequence using per-lead merge variables."""
     if not isinstance(campaign, dict) or not str(campaign.get("name", "")).strip():
         raise ValueError("Campaign name is required for Instantly sync.")
@@ -73,6 +74,9 @@ def build_campaign_payload(campaign: dict[str, Any], steps: list[dict[str, Any]]
 
     return {
         "name": str(campaign["name"]).strip(),
+        **({"email_list": list(dict.fromkeys(email.strip().lower() for email in sender_emails
+                                               if isinstance(email, str) and email.strip()))}
+           if sender_emails else {}),
         "is_evergreen": False,
         "campaign_schedule": {
             "start_date": start.isoformat(),
@@ -144,7 +148,17 @@ async def sync_completed_run(settings: Settings, run_id: str) -> dict[str, Any]:
     """
     context = await load_sync_run_context(settings, run_id)
     run, campaign = context["run"], context["campaign"]
-    mapping = await create_campaign_mapping(settings, run_id)
+    sender_emails = list(dict.fromkeys(email.strip().lower()
+                                      for email in run.get("sender_account_emails", [])
+                                      if isinstance(email, str) and email.strip()))
+    if not sender_emails:
+        raise RuntimeError("No sending inbox was selected before this run; no Instantly campaign was created.")
+    mapping = await create_campaign_mapping(settings, run_id, sender_emails)
+    mapped_senders = list(dict.fromkeys(email.strip().lower()
+                                        for email in mapping.get("sender_account_emails", [])
+                                        if isinstance(email, str) and email.strip()))
+    if mapped_senders != sender_emails:
+        raise RuntimeError("This run has a different saved Instantly sender selection; reconcile it before retrying.")
     provider_campaign_id = mapping.get("instantly_campaign_id")
     provider_campaign_was_active = mapping.get("status") == "active"
     if mapping.get("status") == "launching":
@@ -160,7 +174,8 @@ async def sync_completed_run(settings: Settings, run_id: str) -> dict[str, Any]:
         if mapping.get("status") == "failed":
             raise RuntimeError("Instantly campaign creation needs manual reconciliation before retry.")
         payload = build_campaign_payload(campaign, campaign["steps"],
-                                         delay_hours=settings.instantly_followup_delay_hours)
+                                         delay_hours=settings.instantly_followup_delay_hours,
+                                         sender_emails=sender_emails)
         try:
             created = await create_campaign(payload, settings)
         except (InstantlyTimeoutError, InstantlyWriteError, BadResponseError) as exc:
@@ -282,7 +297,45 @@ async def sync_completed_run(settings: Settings, run_id: str) -> dict[str, Any]:
         })
         result["launch"] = "held_no_eligible_leads"
         return result
-    # Sender accounts are chosen by an operator in PocketPerks after sync.
-    # Keep the provider campaign inactive until that choice is saved.
-    result["launch"] = "awaiting_sender_selection"
+    if not settings.instantly_auto_launch or settings.send_mode != "live":
+        result["launch"] = "disabled_by_configuration"
+        return result
+    try:
+        start_at = _aware_datetime(campaign.get("start_at"), "start")
+        end_at = _aware_datetime(campaign.get("end_at"), "end")
+    except ValueError as exc:
+        await update_campaign_mapping(settings, mapping["id"], {
+            "status": "failed", "error_detail": str(exc)[:240],
+        })
+        result["launch"] = "held_invalid_schedule"
+        return result
+    now = datetime.now(UTC)
+    if end_at <= start_at or end_at <= now:
+        await update_campaign_mapping(settings, mapping["id"], {
+            "status": "failed", "error_detail": "Campaign sending window has ended or is invalid.",
+        })
+        result["launch"] = "held_invalid_schedule"
+        return result
+    if start_at > now:
+        await update_campaign_mapping(settings, mapping["id"], {
+            "status": "scheduled", "sender_account_emails": sender_emails, "error_detail": None,
+        })
+        result["launch"] = "scheduled"
+        return result
+    await update_campaign_mapping(settings, mapping["id"], {
+        "status": "launching", "error_detail": "Selected sender inboxes saved; activation is being confirmed.",
+    })
+    try:
+        await activate_campaign(provider_campaign_id, settings)
+    except (InstantlyError, InstantlyTimeoutError, InstantlyWriteError) as exc:
+        unknown = getattr(exc, "outcome_unknown", False)
+        await update_campaign_mapping(settings, mapping["id"], {
+            "status": "launching" if unknown else "failed",
+            "error_detail": "Instantly activation outcome is unknown; reconcile before retrying."
+            if unknown else f"Instantly activation failed: {str(exc)}"[:240],
+        })
+        result["launch"] = "reconciliation_required" if unknown else "failed"
+        return result
+    await update_campaign_mapping(settings, mapping["id"], {"status": "active", "error_detail": None})
+    result["launch"] = "active"
     return result

@@ -35,7 +35,8 @@ async def _checked(response, detail: str) -> list[dict]:
     return rows
 
 
-async def create_campaign_mapping(settings: Settings, run_id: str) -> dict:
+async def create_campaign_mapping(settings: Settings, run_id: str,
+                                 sender_emails: list[str] | None = None) -> dict:
     """Create or retrieve the one provider mapping row for a PocketPerks run."""
     base = _base(settings)
     async with httpx.AsyncClient(timeout=20) as client:
@@ -43,13 +44,14 @@ async def create_campaign_mapping(settings: Settings, run_id: str) -> dict:
             f"{base}/instantly_campaign_mappings",
             params={"on_conflict": "run_id"},
             headers=_headers(settings, "resolution=ignore-duplicates,return=representation"),
-            json={"run_id": run_id},
+            json={"run_id": run_id, **({"sender_account_emails": sender_emails}
+                                        if sender_emails is not None else {})},
         )
         rows = await _checked(response, "Could not create Instantly campaign mapping.")
         if rows:
             return rows[0]
         response = await client.get(f"{base}/instantly_campaign_mappings", params={
-            "select": "id,run_id,instantly_campaign_id,status,error_detail,created_at,updated_at",
+            "select": "id,run_id,instantly_campaign_id,status,error_detail,sender_account_emails,created_at,updated_at",
             "run_id": f"eq.{run_id}", "limit": "1",
         }, headers=_headers(settings))
         rows = await _checked(response, "Could not load Instantly campaign mapping.")
@@ -165,13 +167,16 @@ async def load_sync_run_context(settings: Settings, run_id: str) -> dict:
     base = _base(settings)
     async with httpx.AsyncClient(timeout=25) as client:
         runs = await _checked(await client.get(f"{base}/campaign_runs", params={
-            "select": "id,campaign_id,batch_id,status", "id": f"eq.{run_id}", "limit": "1",
+            "select": "id,campaign_id,batch_id,status,sender_account_emails", "id": f"eq.{run_id}", "limit": "1",
         }, headers=_headers(settings)), "Could not load the campaign run for Instantly sync.")
         if not runs:
             raise HTTPException(status_code=404, detail="Campaign run not found.")
         run = runs[0]
         if run.get("status") != "completed":
             raise HTTPException(status_code=409, detail="Personalization must finish before Instantly sync.")
+        sender_emails = run.get("sender_account_emails")
+        if not isinstance(sender_emails, list) or not sender_emails:
+            raise HTTPException(status_code=409, detail="Select at least one Instantly sending inbox before starting this campaign.")
         campaigns = await _checked(await client.get(f"{base}/campaigns", params={
             "select": "id,name,total_emails,start_date,end_date,start_at,end_at,status,campaign_steps(id,step_number,generic_drafts(id,status))",
             "id": f"eq.{run['campaign_id']}", "limit": "1",
