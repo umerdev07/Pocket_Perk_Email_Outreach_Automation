@@ -15,6 +15,8 @@ type Summary = {
   unread_replies: number;
   instantly_campaigns: number;
   instantly_leads_synced: number;
+  instantly_active_campaigns: number;
+  instantly_auto_launch_enabled: boolean;
   activity: {
     available?: boolean;
     days: { date: string; leads: number; replies: number }[];
@@ -63,7 +65,7 @@ export default function DashboardSummary({ apiBase, refreshKey, onNavigate }: Pr
     { label: "Needs approval", value: summary.pending_approvals, hint: "Human review required", tone: "amber" },
     { label: "Queued · not confirmed sent", value: summary.queued_not_sent, hint: "Waiting for Instantly status sync", tone: "amber" },
     { label: "Personalization runs", value: summary.active_runs, hint: "Currently processing", tone: "blue" },
-    { label: "Instantly drafts", value: summary.instantly_campaigns, hint: "Synced; launch remains manual", tone: "violet" },
+    { label: "Instantly campaigns", value: summary.instantly_campaigns, hint: summary.instantly_auto_launch_enabled ? `${summary.instantly_active_campaigns} active · auto launch enabled` : "Draft sync only · auto launch is off", tone: "violet" },
     { label: "Leads synced to Instantly", value: summary.instantly_leads_synced, hint: "Provider lead records", tone: "green" },
     { label: "Lead replies", value: summary.total_replies, hint: `${summary.unread_replies} unread in PocketPerks`, tone: "amber" },
   ] : [];

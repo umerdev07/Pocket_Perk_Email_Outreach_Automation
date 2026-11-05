@@ -135,7 +135,6 @@ def test_create_campaign_posts_draft_payload_without_activating_campaign():
     assert url == "https://api.instantly.ai/api/v2/campaigns"
     assert headers["Authorization"] == "Bearer test-instantly-key"
     assert sent_payload == payload
-    assert not hasattr(client, "activate_campaign")
 
 
 def test_add_campaign_leads_chunks_at_provider_limit():

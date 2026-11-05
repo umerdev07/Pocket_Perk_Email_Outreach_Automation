@@ -193,3 +193,31 @@ async def load_sync_lead_page(settings: Settings, run_id: str, batch_id: str,
     for lead in leads:
         lead["personalized_steps"] = emails_by_lead.get(str(lead["id"]), [])
     return leads
+
+
+async def load_active_campaign_windows(settings: Settings, *, limit: int = 100) -> list[dict]:
+    """Load active Instantly mappings and their PocketPerks campaign end times."""
+    base = _base(settings)
+    async with httpx.AsyncClient(timeout=25) as client:
+        mappings = await _checked(await client.get(f"{base}/instantly_campaign_mappings", params={
+            "select": "id,run_id,instantly_campaign_id,status", "status": "in.(active,launching)",
+            "instantly_campaign_id": "not.is.null", "order": "updated_at.asc", "limit": str(limit),
+        }, headers=_headers(settings)), "Could not load active Instantly campaign mappings.")
+        run_ids = [str(row["run_id"]) for row in mappings if row.get("run_id")]
+        runs_by_id: dict[str, dict] = {}
+        for offset in range(0, len(run_ids), 100):
+            chunk = run_ids[offset:offset + 100]
+            runs = await _checked(await client.get(f"{base}/campaign_runs", params={
+                "select": "id,campaigns(end_at)", "id": f"in.({','.join(chunk)})",
+                "limit": str(len(chunk)),
+            }, headers=_headers(settings)), "Could not load campaign end times for auto-launch.")
+            runs_by_id.update({str(row["id"]): row for row in runs if row.get("id")})
+    result = []
+    for mapping in mappings:
+        run = runs_by_id.get(str(mapping.get("run_id"))) or {}
+        campaign = run.get("campaigns")
+        if isinstance(campaign, list):
+            campaign = campaign[0] if campaign else None
+        if isinstance(campaign, dict) and isinstance(campaign.get("end_at"), str):
+            result.append({**mapping, "end_at": campaign["end_at"]})
+    return result

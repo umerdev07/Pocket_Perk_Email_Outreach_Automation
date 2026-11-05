@@ -1,7 +1,7 @@
 """Build safe Instantly draft and lead payloads from reviewed PocketPerks emails.
 
-Campaigns produced here are provider-side drafts only. This module has no
-activation or sending path.
+Campaigns are created as drafts, then optionally activated after every eligible
+lead sequence has synced and the configured start time has arrived.
 """
 from datetime import UTC, date, datetime
 from zoneinfo import ZoneInfo
@@ -11,8 +11,9 @@ from app.config import Settings
 from app.instantly_sync_db import (create_campaign_mapping, get_lead_mapping_statuses,
                                    load_sync_run_context, load_sync_lead_page,
                                    save_lead_mappings, update_campaign_mapping)
-from app.integrations.instantly_client import (BadResponseError, InstantlyTimeoutError,
-                                               InstantlyWriteError, add_campaign_leads,
+from app.integrations.instantly_client import (BadResponseError, InstantlyError,
+                                               InstantlyTimeoutError, InstantlyWriteError,
+                                               activate_campaign, add_campaign_leads,
                                                create_campaign)
 from app.suppression_db import get_suppressed_emails
 
@@ -124,8 +125,20 @@ def build_lead_payload(lead: dict[str, Any], personalized_steps: list[dict[str, 
     }
 
 
-async def sync_completed_run(settings: Settings, run_id: str) -> dict[str, int | str]:
-    """Create an inactive provider draft and sync only complete queued sequences.
+def _aware_datetime(value: Any, label: str) -> datetime:
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"Campaign {label} timestamp is required for automatic launch.")
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise ValueError(f"Campaign {label} timestamp is invalid.") from exc
+    if parsed.tzinfo is None:
+        raise ValueError(f"Campaign {label} timestamp must include a timezone.")
+    return parsed.astimezone(UTC)
+
+
+async def sync_completed_run(settings: Settings, run_id: str) -> dict[str, Any]:
+    """Create/sync a provider draft; activate only with both explicit runtime gates.
 
     Provider writes are never retried here when their result may be ambiguous.
     Existing `unknown` mappings require manual reconciliation before retry.
@@ -134,6 +147,16 @@ async def sync_completed_run(settings: Settings, run_id: str) -> dict[str, int |
     run, campaign = context["run"], context["campaign"]
     mapping = await create_campaign_mapping(settings, run_id)
     provider_campaign_id = mapping.get("instantly_campaign_id")
+    provider_campaign_was_active = mapping.get("status") == "active"
+    if mapping.get("status") == "launching":
+        return {"run_id": run_id, "instantly_campaign_id": provider_campaign_id,
+                "synced": 0, "skipped": 0, "failed": 0, "unknown": 0,
+                "launch": "reconciliation_required"}
+    if mapping.get("status") == "completed":
+        return {"run_id": run_id, "instantly_campaign_id": provider_campaign_id,
+                "synced": 0, "skipped": 0, "failed": 0, "unknown": 0, "launch": "completed"}
+    if mapping.get("status") == "failed":
+        raise RuntimeError("Instantly campaign mapping is failed; reconcile provider state before retrying.")
     if not provider_campaign_id:
         if mapping.get("status") == "failed":
             raise RuntimeError("Instantly campaign creation needs manual reconciliation before retry.")
@@ -180,6 +203,7 @@ async def sync_completed_run(settings: Settings, run_id: str) -> dict[str, int |
         states = await get_lead_mapping_statuses(settings, mapping["id"], [str(row["id"]) for row in leads])
         candidates: list[dict] = []
         mapping_rows: list[dict] = []
+        held_mapping_rows: list[dict] = []
         suppressed_mapping_rows: list[dict] = []
         for lead in leads:
             previous = states.get(str(lead["id"]))
@@ -196,11 +220,15 @@ async def sync_completed_run(settings: Settings, run_id: str) -> dict[str, int |
             if (len(emails) != step_count or any(item.get("status") != "queued" for item in emails)
                     or any(item.get("step_number") != index for index, item in enumerate(emails, start=1))):
                 counts["skipped"] += 1
+                held_mapping_rows.append({"lead_id": str(lead["id"]), "status": "pending",
+                                          "error_detail": "Held until every campaign email step is queued after review."})
                 continue
             try:
                 provider_lead = build_lead_payload(lead, emails)
             except ValueError:
                 counts["skipped"] += 1
+                held_mapping_rows.append({"lead_id": str(lead["id"]), "status": "pending",
+                                          "error_detail": "Held because the complete personalized email sequence is not ready for sync."})
                 continue
             candidates.append(provider_lead)
             mapping_rows.append({"lead_id": str(lead["id"]), "status": "unknown",
@@ -208,9 +236,14 @@ async def sync_completed_run(settings: Settings, run_id: str) -> dict[str, int |
 
         if suppressed_mapping_rows:
             await save_lead_mappings(settings, mapping["id"], suppressed_mapping_rows)
+        if held_mapping_rows:
+            await save_lead_mappings(settings, mapping["id"], held_mapping_rows)
         if candidates:
             await save_lead_mappings(settings, mapping["id"], mapping_rows)
-            await update_campaign_mapping(settings, mapping["id"], {"status": "syncing_leads", "error_detail": None})
+            await update_campaign_mapping(settings, mapping["id"], {
+                "status": "active" if provider_campaign_was_active else "syncing_leads",
+                "error_detail": None,
+            })
             result = await add_campaign_leads(provider_campaign_id, candidates, settings)
             returned = {int(item["index"]): item["id"] for item in result.get("created_leads", [])}
             resolved = []
@@ -233,8 +266,58 @@ async def sync_completed_run(settings: Settings, run_id: str) -> dict[str, int |
 
     unresolved = counts["unknown"] + counts["failed"]
     await update_campaign_mapping(settings, mapping["id"], {
-        "status": "failed" if unresolved else "leads_synced",
+        "status": "active" if provider_campaign_was_active else "failed" if unresolved else "leads_synced",
         "error_detail": "Some provider lead outcomes need reconciliation; those leads will not be resent."
         if unresolved else None,
     })
-    return {"run_id": run_id, "instantly_campaign_id": provider_campaign_id, **counts}
+    result: dict[str, Any] = {"run_id": run_id, "instantly_campaign_id": provider_campaign_id, **counts}
+    if unresolved:
+        result["launch"] = "held_for_reconciliation"
+        return result
+    if provider_campaign_was_active:
+        result["launch"] = "already_active"
+        return result
+    if not settings.instantly_auto_launch:
+        result["launch"] = "disabled_by_configuration"
+        return result
+    if settings.send_mode != "live":
+        result["launch"] = "disabled_in_test_mode"
+        return result
+    if counts["synced"] < 1:
+        await update_campaign_mapping(settings, mapping["id"], {
+            "status": "failed", "error_detail": "Auto-launch was held because no eligible leads synced to Instantly.",
+        })
+        result["launch"] = "held_no_eligible_leads"
+        return result
+
+    start_at = _aware_datetime(campaign.get("start_at"), "start")
+    end_at = _aware_datetime(campaign.get("end_at"), "end")
+    now = datetime.now(UTC)
+    if end_at <= now or end_at <= start_at:
+        await update_campaign_mapping(settings, mapping["id"], {
+            "status": "failed", "error_detail": "Auto-launch was held because the campaign time window has expired or is invalid.",
+        })
+        result["launch"] = "held_invalid_window"
+        return result
+    if start_at > now:
+        result["launch"] = "scheduled"
+        result["launch_deferred_until"] = start_at.isoformat()
+        return result
+
+    await update_campaign_mapping(settings, mapping["id"], {
+        "status": "launching", "error_detail": "Activation submitted; reconcile status if backend restarts before confirmation.",
+    })
+    try:
+        await activate_campaign(str(provider_campaign_id), settings)
+    except InstantlyError as exc:
+        outcome_unknown = (isinstance(exc, (InstantlyTimeoutError, BadResponseError))
+                           or isinstance(exc, InstantlyWriteError) and exc.outcome_unknown)
+        detail = ("Campaign activation outcome is unknown; check Instantly before retrying."
+                  if outcome_unknown else f"Instantly campaign activation failed: {str(exc)}")
+        await update_campaign_mapping(settings, mapping["id"], {
+            "status": "launching" if outcome_unknown else "failed", "error_detail": detail[:240],
+        })
+        raise RuntimeError(detail) from exc
+    await update_campaign_mapping(settings, mapping["id"], {"status": "active", "error_detail": None})
+    result["launch"] = "active"
+    return result

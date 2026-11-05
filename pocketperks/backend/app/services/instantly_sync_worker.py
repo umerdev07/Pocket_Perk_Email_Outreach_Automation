@@ -1,6 +1,8 @@
-"""Durable background worker for inactive Instantly drafts and lead sync."""
+"""Durable background worker for Instantly draft, lead sync, and gated launch."""
 import asyncio
 import logging
+from datetime import UTC, datetime
+import math
 
 from fastapi import HTTPException
 
@@ -37,8 +39,17 @@ async def _consume(settings: Settings, job: dict) -> None:
     lease_task = asyncio.create_task(_keep_lease(settings, message_id))
     try:
         result = await sync_completed_run(settings, run_id)
-        logger.info("Instantly draft sync completed for run %s (synced=%s, skipped=%s).",
-                    run_id, result["synced"], result["skipped"])
+        deferred_until = result.get("launch_deferred_until")
+        if isinstance(deferred_until, str):
+            launch_at = datetime.fromisoformat(deferred_until.replace("Z", "+00:00"))
+            seconds_until_launch = max(30, math.ceil((launch_at - datetime.now(UTC)).total_seconds()))
+            # Recheck at least daily so long schedules remain restart-safe and bounded.
+            await extend_instantly_sync_job(settings, message_id,
+                                            visibility_seconds=min(seconds_until_launch, 86_400))
+            logger.info("Instantly campaign for run %s is synced and scheduled for its start time.", run_id)
+            return
+        logger.info("Instantly sync finished for run %s (synced=%s, skipped=%s, launch=%s).",
+                    run_id, result["synced"], result["skipped"], result.get("launch", "not_requested"))
         await archive_instantly_sync_job(settings, message_id)
     except HTTPException as exc:
         if exc.status_code == 409:

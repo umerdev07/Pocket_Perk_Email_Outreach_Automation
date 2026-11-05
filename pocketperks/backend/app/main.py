@@ -22,6 +22,7 @@ from app.routers.suppressions import router as suppressions_router
 from app.services.campaign_queue_worker import run_campaign_queue_worker
 from app.services.instantly_sync_worker import run_instantly_sync_worker
 from app.services.instantly_replies_worker import run_instantly_replies_worker
+from app.services.instantly_lifecycle_worker import run_instantly_lifecycle_worker
 
 
 def create_app(*, auth_enabled: bool = True, queue_worker_enabled: bool = False) -> FastAPI:
@@ -38,6 +39,8 @@ def create_app(*, auth_enabled: bool = True, queue_worker_enabled: bool = False)
             if settings.instantly_api_key:
                 worker_tasks.append(asyncio.create_task(
                     run_instantly_replies_worker(settings), name="pocketperks-instantly-replies-worker"))
+                worker_tasks.append(asyncio.create_task(
+                    run_instantly_lifecycle_worker(settings), name="pocketperks-instantly-lifecycle-worker"))
         yield
         for worker_task in worker_tasks:
             worker_task.cancel()

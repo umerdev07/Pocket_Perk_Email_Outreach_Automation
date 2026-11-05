@@ -4,8 +4,9 @@ Endpoint and bearer authentication follow the official API docs:
 https://developer.instantly.ai/api-reference/account/list-account
 
 Campaign creation and lead sync use the API v2 campaign and bulk-add-leads
-endpoints. This module deliberately has no campaign activation or send method:
-creating a draft and syncing data must not start outreach.
+endpoints. Campaign activation and pause are separate explicit API calls;
+the sync service gates activation behind reviewed data, schedule, and runtime
+configuration so draft creation alone never starts outreach.
 """
 import asyncio
 from typing import Any
@@ -349,6 +350,54 @@ async def create_campaign(payload: dict[str, Any], settings: Settings | None = N
         raise BadResponseError("Instantly returned an invalid campaign ID.") from exc
     return {"id": campaign_id, "name": result.get("name", payload["name"]),
             "status": result.get("status", "draft")}
+
+
+async def activate_campaign(campaign_id: str, settings: Settings | None = None) -> dict[str, Any]:
+    """Activate one fully synced campaign; the caller must enforce send-mode and timing gates."""
+    config = settings or get_settings()
+    try:
+        UUID(campaign_id)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("A valid Instantly campaign ID is required.") from exc
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as session:
+            response = await session.post(f"{CAMPAIGNS_URL}/{campaign_id}/activate",
+                                          headers=_write_headers(config))
+    except httpx.TimeoutException as exc:
+        raise InstantlyTimeoutError("Instantly campaign activation timed out; outcome is unknown.") from exc
+    except httpx.HTTPError as exc:
+        raise InstantlyTimeoutError("Instantly campaign activation connection failed; outcome is unknown.") from exc
+    if not response.is_success:
+        _write_error(response, "campaign activation")
+    try:
+        result = response.json()
+    except (ValueError, TypeError) as exc:
+        raise BadResponseError("Instantly returned an invalid response after campaign activation.") from exc
+    if not isinstance(result, dict) or result.get("id") != campaign_id:
+        raise BadResponseError("Instantly did not confirm which campaign was activated.")
+    status = result.get("status")
+    if status not in (1, "1", "active", "running"):
+        raise BadResponseError("Instantly did not confirm the campaign is active.")
+    return {"id": campaign_id, "status": "active"}
+
+
+async def pause_campaign(campaign_id: str, settings: Settings | None = None) -> None:
+    """Pause one campaign after its configured end time."""
+    config = settings or get_settings()
+    try:
+        UUID(campaign_id)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("A valid Instantly campaign ID is required.") from exc
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as session:
+            response = await session.post(f"{CAMPAIGNS_URL}/{campaign_id}/pause",
+                                          headers=_write_headers(config))
+    except httpx.TimeoutException as exc:
+        raise InstantlyTimeoutError("Instantly campaign pause timed out; outcome is unknown.") from exc
+    except httpx.HTTPError as exc:
+        raise InstantlyRequestError("Could not communicate with Instantly to pause the campaign.") from exc
+    if not response.is_success:
+        _write_error(response, "campaign pause")
 
 
 async def add_campaign_leads(campaign_id: str, leads: list[dict[str, Any]],

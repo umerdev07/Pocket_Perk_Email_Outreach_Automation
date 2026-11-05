@@ -58,10 +58,13 @@ async def get_dashboard_summary(settings: Settings, *, activity_days: int = 14) 
             _count(client, base, headers, "replies", {"status": "eq.new"}),
             _count(client, base, headers, "instantly_campaign_mappings", {"instantly_campaign_id": "not.is.null"}),
             _count(client, base, headers, "instantly_lead_mappings", {"status": "eq.synced"}),
+            _count(client, base, headers, "instantly_campaign_mappings", {"status": "eq.active"}),
             _activity(client, base, headers, activity_days),
         )
     return {"total_leads": totals[0], "total_campaigns": totals[1], "approved_campaigns": totals[2],
             "pending_approvals": totals[3], "queued_not_sent": totals[4], "active_runs": totals[5],
             "total_replies": totals[6], "unread_replies": totals[7],
             "instantly_campaigns": totals[8], "instantly_leads_synced": totals[9],
-            "activity": totals[10]}
+            "instantly_active_campaigns": totals[10],
+            "instantly_auto_launch_enabled": settings.instantly_auto_launch and settings.send_mode == "live",
+            "activity": totals[11]}
