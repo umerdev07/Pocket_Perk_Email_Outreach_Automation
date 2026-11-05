@@ -10,7 +10,7 @@ from app.instantly_sync_db import (get_campaign_mapping_for_run, load_sync_run_c
 from app.integrations.instantly_client import (InstantlyError, activate_campaign,
                                                list_sending_accounts,
                                                set_campaign_sending_accounts)
-from app.services.instantly_sync_service import _aware_datetime
+from app.instantly_sync_service import _aware_datetime
 
 
 def is_sending_account_ready(account: dict) -> bool:
