@@ -17,6 +17,17 @@ type Reply = {
 };
 
 type Props = { apiBase: string };
+type ReadFilter = "all" | "unread" | "read";
+
+function splitQuotedMessage(body: string) {
+  const lines = body.replace(/\r\n?/g, "\n").split("\n");
+  const marker = lines.findIndex(line =>
+    /^\s*On .{3,220}wrote:\s*$/i.test(line) ||
+    /^\s*-{2,}\s*Original Message\s*-{2,}\s*$/i.test(line) ||
+    /^\s*From:\s+.+$/i.test(line) || /^\s*>/.test(line) || /^\s*_{5,}\s*$/.test(line));
+  if (marker < 0) return { reply: body.trim(), quoted: "" };
+  return { reply: lines.slice(0, marker).join("\n").trim(), quoted: lines.slice(marker).join("\n").trim() };
+}
 
 export default function LeadReplies({ apiBase }: Props) {
   const [replies, setReplies] = useState<Reply[]>([]);
@@ -26,7 +37,9 @@ export default function LeadReplies({ apiBase }: Props) {
   const [syncing, setSyncing] = useState(false);
   const [error, setError] = useState("");
   const [search, setSearch] = useState("");
-  const [unreadOnly, setUnreadOnly] = useState(false);
+  const [readFilter, setReadFilter] = useState<ReadFilter>("all");
+  const [campaignFilter, setCampaignFilter] = useState("all");
+  const [dateFilter, setDateFilter] = useState("all");
   const [openId, setOpenId] = useState("");
 
   const loadReplies = useCallback(async (showLoading = true) => {
@@ -98,12 +111,21 @@ export default function LeadReplies({ apiBase }: Props) {
   }
 
   const visibleReplies = useMemo(() => replies.filter(reply => {
-    if (unreadOnly && reply.status !== "new") return false;
+    if (readFilter === "unread" && reply.status !== "new") return false;
+    if (readFilter === "read" && reply.status !== "read") return false;
+    if (campaignFilter !== "all" && reply.campaign_id !== campaignFilter) return false;
+    if (dateFilter !== "all") {
+      const cutoff = Date.now() - Number(dateFilter) * 24 * 60 * 60 * 1000;
+      if (new Date(reply.received_at).getTime() < cutoff) return false;
+    }
     const query = search.trim().toLowerCase();
-    return !query || [reply.from_email, reply.subject, reply.body, reply.leads?.business_name,
+    return !query || [reply.from_email, reply.subject, splitQuotedMessage(reply.body).reply, reply.leads?.business_name,
       reply.leads?.email, reply.campaigns?.name].some(value => value?.toLowerCase().includes(query));
-  }), [replies, search, unreadOnly]);
+  }), [replies, search, readFilter, campaignFilter, dateFilter]);
   const unreadCount = replies.filter(reply => reply.status === "new").length;
+  const filtersActive = Boolean(search || readFilter !== "all" || campaignFilter !== "all" || dateFilter !== "all");
+  const campaignOptions = Array.from(new Map(replies.filter(reply => reply.campaign_id && reply.campaigns?.name)
+    .map(reply => [reply.campaign_id!, reply.campaigns!.name!])).entries());
 
   return (
     <section className="content lead-replies-page" aria-labelledby="replies-heading">
@@ -117,17 +139,29 @@ export default function LeadReplies({ apiBase }: Props) {
       </div>
       <div className="reply-summary">
         <article><small>Replies loaded</small><b>{replies.length}</b></article>
-        <article><small>Unread in this view</small><b>{unreadCount}</b></article>
+        <article><small>Unread loaded</small><b>{unreadCount}</b></article>
         <span>Automatic inbox check runs every minute while the backend is online.</span>
       </div>
       {error && <p role="alert" className="error">{error}</p>}
       <section className="card replies-card">
         <div className="replies-toolbar">
-          <input aria-label="Search replies" value={search} onChange={event => setSearch(event.target.value)} placeholder="Search sender, business, campaign or message" />
-          <button type="button" className={unreadOnly ? "secondary-button selected" : "secondary-button"} onClick={() => setUnreadOnly(value => !value)}>
-            {unreadOnly ? "Showing unread" : "Unread only"}
-          </button>
+          <input aria-label="Search replies" value={search} onChange={event => setSearch(event.target.value)} placeholder="Search sender, business, campaign or reply" />
+          <div className="reply-filter-row">
+            <label><span>Read status</span><select aria-label="Filter by read status" value={readFilter} onChange={event => setReadFilter(event.target.value as ReadFilter)}>
+              <option value="all">All replies</option><option value="unread">Unread</option><option value="read">Read</option>
+            </select></label>
+            <label><span>Campaign</span><select aria-label="Filter by campaign" value={campaignFilter} onChange={event => setCampaignFilter(event.target.value)}>
+              <option value="all">All campaigns</option>{campaignOptions.map(([id, name]) => <option key={id} value={id}>{name}</option>)}
+            </select></label>
+            <label><span>Received</span><select aria-label="Filter by received date" value={dateFilter} onChange={event => setDateFilter(event.target.value)}>
+              <option value="all">Any time</option><option value="7">Last 7 days</option><option value="30">Last 30 days</option><option value="90">Last 90 days</option>
+            </select></label>
+            {filtersActive && <button type="button" className="reply-clear-filters" onClick={() => {
+              setSearch(""); setReadFilter("all"); setCampaignFilter("all"); setDateFilter("all");
+            }}>Clear filters</button>}
+          </div>
         </div>
+        <div className="reply-results-count">Showing {visibleReplies.length} of {replies.length} loaded replies</div>
         {loading ? <p className="reply-empty">Loading replies…</p> : visibleReplies.length === 0 ? (
           <div className="reply-empty"><span>↩</span><h2>{replies.length ? "No replies match these filters" : "No replies yet"}</h2>
             <p>{replies.length ? "Try a different search or show all replies." : "Replies to your Instantly campaign will appear here after the next sync."}</p>
@@ -135,6 +169,7 @@ export default function LeadReplies({ apiBase }: Props) {
           </div>
         ) : <><div className="reply-list">{visibleReplies.map(reply => {
           const expanded = openId === reply.id;
+          const { reply: cleanBody, quoted } = splitQuotedMessage(reply.body);
           return <article className={`reply-item ${reply.status === "new" ? "unread" : ""}`} key={reply.id}>
             <button className="reply-item-button" type="button" aria-expanded={expanded} onClick={() => {
               setOpenId(current => current === reply.id ? "" : reply.id);
@@ -144,12 +179,13 @@ export default function LeadReplies({ apiBase }: Props) {
               <span className="reply-main"><b>{reply.leads?.business_name || reply.from_email}</b>
                 <small>{reply.from_email}{reply.campaigns?.name ? ` · ${reply.campaigns.name}` : ""}</small>
                 <strong>{reply.subject || "(no subject)"}</strong>
-                <span>{reply.body.replace(/\s+/g, " ").slice(0, 180)}</span></span>
+                <span>{(cleanBody || "No new text detected; quoted email available below.").replace(/\s+/g, " ").slice(0, 180)}</span></span>
               <time dateTime={reply.received_at}>{new Date(reply.received_at).toLocaleString()}</time>
             </button>
             {expanded && <div className="reply-expanded"><div className="reply-meta"><span>From <b>{reply.from_email}</b></span>
               {reply.leads?.email && <span>Lead <b>{reply.leads.email}</b></span>}{reply.campaigns?.name && <span>Campaign <b>{reply.campaigns.name}</b></span>}
-            </div><h3>{reply.subject || "(no subject)"}</h3><p>{reply.body}</p></div>}
+            </div><h3>{reply.subject || "(no subject)"}</h3><div className="reply-body-card"><p>{cleanBody || "No new reply text was detected."}</p></div>
+              {quoted && <details className="reply-quoted"><summary>Show quoted email</summary><pre>{quoted}</pre></details>}</div>}
           </article>;
         })}</div>{hasMore && !search && <div className="reply-load-more"><button className="secondary-button" type="button" disabled={loadingMore} onClick={() => void loadMore()}>{loadingMore ? "Loading…" : "Load more replies"}</button></div>}</>}
       </section>

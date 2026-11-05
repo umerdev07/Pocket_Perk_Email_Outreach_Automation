@@ -221,3 +221,9 @@ This log records completed work and verification reported in this project chat. 
 - Added a durable pagination cursor and migration `017_instantly_reply_sync_state.sql`; the backend polls once per minute while online, continues through large reply backlogs in bounded batches, and the UI also supports manual refresh and loading older replies. The UI shows sender, business/campaign context, subject, preview, full body, unread status, search, and local read state.
 - Extended the dashboard with Instantly campaign/lead sync counts and reply totals, and added minute refresh while the dashboard is open. No campaign launch, send, reply-send, or Instantly lead write action was added in this slice.
 - Apply migration 017 in Supabase and rebuild/restart the backend plus redeploy the frontend before using this feature. Automated tests/build were not run during this change; verify locally before relying on production behavior.
+
+## Lead Replies presentation and dashboard charts
+- Reworked reply cards to foreground the new response, separate sender/lead/campaign metadata, and collapse quoted email history behind a disclosure so the actual reply is readable first.
+- Added practical inbox filters for read state, campaign, received-time window and text search, plus a clear-filters action.
+- Added responsive dashboard charts: a 14-day imported-leads/replies trend and a personalized-email status donut. Chart data is aggregated in Postgres by migration `018_dashboard_activity.sql`; dashboard counters still load if the migration is pending, and charts show a migration hint.
+- Migration 018 must be applied in Supabase before chart data is available. Frontend/backend builds and automated tests were not run in this change.

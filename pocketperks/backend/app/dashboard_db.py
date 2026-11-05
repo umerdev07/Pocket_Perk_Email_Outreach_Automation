@@ -29,7 +29,20 @@ async def _count(client, base: str, headers: dict[str, str], table: str, filters
         raise HTTPException(status_code=503, detail="Database did not return an exact dashboard count.") from exc
 
 
-async def get_dashboard_summary(settings: Settings) -> dict[str, int]:
+async def _activity(client, base: str, headers: dict[str, str]) -> dict:
+    response = await client.post(f"{base}/rpc/dashboard_activity", json={"p_days": 14}, headers=headers)
+    if not response.is_success:
+        return {"days": [], "campaign_status": [], "email_status": [], "available": False}
+    try:
+        value = response.json()
+    except (ValueError, TypeError) as exc:
+        return {"days": [], "campaign_status": [], "email_status": [], "available": False}
+    if not isinstance(value, dict):
+        return {"days": [], "campaign_status": [], "email_status": [], "available": False}
+    return value
+
+
+async def get_dashboard_summary(settings: Settings) -> dict:
     base, headers = _base(settings), _headers(settings)
     async with httpx.AsyncClient(timeout=20) as client:
         totals = await asyncio.gather(
@@ -43,8 +56,10 @@ async def get_dashboard_summary(settings: Settings) -> dict[str, int]:
             _count(client, base, headers, "replies", {"status": "eq.new"}),
             _count(client, base, headers, "instantly_campaign_mappings", {"instantly_campaign_id": "not.is.null"}),
             _count(client, base, headers, "instantly_lead_mappings", {"status": "eq.synced"}),
+            _activity(client, base, headers),
         )
     return {"total_leads": totals[0], "total_campaigns": totals[1], "approved_campaigns": totals[2],
             "pending_approvals": totals[3], "queued_not_sent": totals[4], "active_runs": totals[5],
             "total_replies": totals[6], "unread_replies": totals[7],
-            "instantly_campaigns": totals[8], "instantly_leads_synced": totals[9]}
+            "instantly_campaigns": totals[8], "instantly_leads_synced": totals[9],
+            "activity": totals[10]}
