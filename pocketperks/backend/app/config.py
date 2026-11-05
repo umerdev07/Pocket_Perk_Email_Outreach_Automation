@@ -14,6 +14,8 @@ class Settings(BaseSettings):
     openrouter_api_key: str = ""
     openrouter_model: str = ""
     instantly_api_key: str = ""
+    # A conservative few-hour follow-up gap; drafts remain inactive until a later release step.
+    instantly_followup_delay_hours: int = Field(default=4, ge=1, le=72)
     send_mode: Literal["test", "live"] = "test"
     frontend_origin: str = "http://localhost:3000"
     # Keep provider load bounded; tune these only within the OpenRouter model's limits.

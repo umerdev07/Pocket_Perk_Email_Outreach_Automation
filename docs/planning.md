@@ -152,9 +152,23 @@ Har email ke saath `risk_level` aur `risk_reason` save hoga; reviewer ko reason 
 
 ### 3.5 Instantly sending (pehle docs verify karna)
 
-Instantly ko sirf actual email delivery, provider status aur replies ke liye use karna; lead discovery/Apify integration abhi scope mein nahi. Apify research user manually karega, phir apni CSV/XLSX lead file PocketPerks mein import karega. PocketPerks se Instantly tak har eligible business ki approved personalized subject/body aur recipient jayegi; Instantly mein leads ko bulk-import karna product requirement nahi hai.
+Instantly ko actual email delivery, provider status aur replies ke liye use karna; lead discovery/Apify integration scope mein nahi. Apify research user manually karega aur CSV/XLSX PocketPerks mein import karega. User ne confirm kiya hai ke campaign start par eligible leads Instantly mein bhi campaign ke saath sync ho sakti hain; Supabase PocketPerks ka record of truth rahega.
 
-Instantly mein standalone "send one email" endpoint par bharosa nahi karna. Implementation se pehle official API docs padh kar sending mechanism confirm karo: har lead ka apna personalized subject/body, campaign scheduling, follow-up timing, status callbacks aur minimum write scopes. Final design ko docs verification ke baad yahan update karo.
+Official API v2 docs review (Stage 7.2, 2026-11-05):
+- `POST /api/v2/campaigns` campaign ke liye sequence, sending accounts (`email_list`), schedule, start/end dates aur daily limit accept karta hai. Sequence step mein subject/body variants aur per-step `delay`/`delay_unit` fields hain. Campaign schedule mein `start_date`/`end_date`, daily `timing.from`/`timing.to`, active days aur timezone hain.
+- `POST /api/v2/leads/add` ek request mein 1–1000 leads ko `campaign_id` ke saath add karta hai; email required hai, custom variables supported hain, aur duplicate/invalid checks ka response deta hai. Bulk sync ko 1000 ya us se chhote chunks mein bhejo. PocketPerks mein each created lead ka Instantly ID aur campaign/run mapping persist karo; retry idempotent ho.
+- Har email step ke liye campaign template mein unique custom variables (for example, `pp_step_1_subject`, `pp_step_1_body`) use kiye ja sakte hain; lead ke `custom_variables` mein us lead ke personalized subject/body bheje jayen. Instantly help docs confirm karti hain ke custom variables subject aur body dono mein resolve hote hain. Is se per-lead, per-step content Instantly sequence ke zariye send ho sakta hai.
+- User clarification (2026-11-05): follow-up steps ke darmiyan **kuch ghanton** ka gap chahiye, 3 din ka nahi. Exact default hours implementation se pehle confirm karna hai. Har lead ke step gap ko configured hours mein enforce karo; agar end-window mein steps safely fit na hon to run hold karke reason dikhaye.
+- Follow-up gap aur overall sending pace alag controls hain: sequence delay ek lead ke Email 1→2→3 ko space karta hai; Instantly ka `email_gap`/sending-account behavior alag recipients ke sends ko pace karta hai. Burst sending rokne ke liye shuru mein ek sender account use karo; multiple accounts par scale karne se pehle sequential/low-rate behavior verify karo. Yeh pacing spam placement ko guarantee se nahi rok sakti; Inbox placement domain authentication, sender reputation, recipient engagement aur provider filters par bhi depend karti hai.
+- API schedule daily sending window aur timezone support karta hai, magar `start_date`/`end_date` date-only fields hain. Exact start/end datetime ko PocketPerks durable scheduler enforce karega: start se pehle activation/send nahi, end datetime par pause/stop. Instantly campaign schedule ko additional provider-side guard ke taur par use karo.
+- `email_sent`, `reply_received`, `email_bounced`, `lead_unsubscribed` webhook event types available hain. Webhook primary status/reply path hoga; `GET /api/v2/emails` polling fallback ke liye `emails:read` scope lega. Webhook idempotency aur signature/secret validation PocketPerks mein implement honi hai.
+- API v2 test endpoint `POST /api/v2/emails/test` `emails:create` maangta hai aur turant real test email bhejta hai; yeh dry-run nahi aur campaign sequence test ka substitute nahi. PocketPerks `SEND_MODE=test` ko no-send behavior hi rehna hai.
+
+Required least-privilege scopes for planned API path: existing `accounts:read` and `campaigns:read`, plus `campaigns:create`, `campaigns:update`, `leads:create`, `webhooks:create` (and `webhooks:read` if checking existing hook config), and `emails:read` for polling fallback. Existing API key scopes cannot be expanded; create a separate v2 key. `emails:create` only if we explicitly add the separate immediate test-email feature. Do not use `all:all`.
+
+Sending account policy: allow only the five active `@apppocketperks.com` accounts selected for this PocketPerks workspace; explicitly exclude `praveen@takeawaymax.co.uk`. Start controlled verification with one PocketPerks sender account. Keep warmup running; account Active status alone is not deliverability proof.
+
+No generic new-outbound `/send` API is documented. The supported design is create/use an Instantly campaign with a sequence, add the batch leads to it, and activate it only after the durable PocketPerks scheduler/risk gates permit. Instantly campaign and lead records will coexist with PocketPerks records by user decision.
 
 **Client ka Instantly account:** API key ka read-only test ho chuka hai aur 6 connected sending accounts list hue. Yeh sirf account-read verification tha; is se sending capability ya email delivery verify nahi hoti.
 
@@ -305,7 +319,8 @@ Unique indexes: `email`, `domain`. Rejected, duplicate aur invalid rows `leads` 
 | campaign\_id | uuid FK |  |
 | step\_number | int | unique (campaign\_id, step\_number) |
 | context | text | user ka Email N Context |
-| delay\_days | int | default 0 (step 1), baqi default 3 |
+| delay\_value | numeric | step 1 = 0; follow-up delay configured value |
+| delay\_unit | text | `hours` / `days` / `minutes`; follow-up default unit `hours` (exact default value pending) |
 
 **generic\_drafts**
 
@@ -441,14 +456,14 @@ Koi fake business data repo mein nahi. Testing ke liye user apni asli (ya sample
 - Tay: har marketing email mein sender identity aur opt-out tareeqa hoga; opt-outs future sends se suppress honge. Individual subscriber eligibility ko send se pehle handle karna hoga.
 
 * [ ] Sender address ka matlab: kya email ke neeche business ka naam + address footer chahiye? Format kya ho?
-* [ ] Steps ke beech default delay 3 din theek hai?
+* [ ] Follow-up gap few hours ka hoga; exact default kitne hours rakhna hai? (implementation se pehle confirm)
 * [ ] Sample lead file (chhoti 5-10 rows) bhej dein taake import test ho sake.
 * [ ] Instantly API key aur kaun sa plan (API v2 access)?
 * [ ] Steps ki sankhya 10 tak: sending sequence mein Instantly par bhi itne steps allowed hain? Stage 7 mein verify hoga.
 
 
 ### Campaign scheduling requirements (confirmed)
-- Campaigns have a start date/time and end date/time in the UK timezone. The current implementation stores date fields only; they do not trigger sends yet, so time-of-day scheduling and timezone handling still need implementation/migration.
+- Campaigns have a start date/time and end date/time in the UK timezone. The frontend and API now accept UK-local date/time and the backend stores absolute timestamps; migration `016_campaign_datetime_window.sql` must be applied after 015. These values do not trigger sending yet; the exact timestamp scheduler is still pending.
 - Once sending is implemented, spread the campaign's available window across its email steps for each lead, respecting any configured follow-up delay and provider limits. Never send before the start time or after the end time. If the window cannot fit the configured steps safely, hold the run and show a clear reason instead of sending all steps together.
 - Sending must use a durable database-backed queue/scheduler and idempotent worker so queued messages survive app/browser closure, server restarts, and worker retries. Never mark `sent` until Instantly confirms a successful send.
 - Starting a campaign is intended to be the one-click handoff for the chosen imported batch and approved campaign: personalization, risk routing, scheduling, and provider sends happen in the backend. Closing the browser must not cancel this work. Keep `SEND_MODE=test` until the full provider path and user authorization are verified.
@@ -467,5 +482,6 @@ Koi fake business data repo mein nahi. Testing ke liye user apni asli (ya sample
 
 ### Next implementation slice
 - Stage 7.1 is complete: read-only Instantly client and live account-list check succeeded (6 accounts); no sends were made.
-- Stage 7.2 is pending: review official Instantly API docs for per-lead personalized subject/body, campaign/sequence mechanics, scheduling/follow-ups, reply sync, and minimum write scopes. Apify API integration is explicitly out of scope for now.
-- Stage 7.3 will implement the test-mode, durable one-click sending workflow, opt-out/suppression handling, send-status tracking, and scheduled follow-ups. Stage 8 will complete reply ingestion/inbox integration if not covered by the verified Instantly path. Do not enable live sends until documentation, eligibility checks, opt-out handling, and user authorization are in place.
+- Stage 7.2 is complete: official API v2 docs verify campaign creation/activation, lead batch sync (up to 1000 per call), step custom variables, date/window scheduling, follow-up delays, webhooks and required scopes. Instantly leads will be synced into the selected campaign while Supabase remains the PocketPerks record of truth. No live write call or email send has been made during this docs review.
+- Stage 7.3 remains in progress. A durable Instantly sync worker is now wired to a separate PGMQ queue. It creates an inactive provider draft, maps only leads whose complete personalized sequence is `queued`, uses per-lead subject/body merge variables, and records provider IDs/statuses in Supabase. Unknown write outcomes are held from automatic resend. It has no campaign activation or send method. Apply `pocketperks/supabase/migrations/015_durable_instantly_sync_queue.sql` after migration 014 before restarting the backend; no provider write has been run by this implementation.
+- Remaining before any live send: verify the worker with mocked and controlled dummy-address tests; reconcile unknown mappings; add explicit opt-out/suppression handling and eligibility checks; finalize sender-account selection; implement provider reply/status webhooks; enforce exact UK start/end timestamps with a durable scheduler; confirm the four-hour sequence gap against the user's intended few-hour cadence; add the opt-out line. Instantly currently receives an inactive draft with date-only campaign boundaries and a separate daily send window, so this is not proof that the selected exact times will be honored. Keep `SEND_MODE=test` and do not activate provider campaigns until those gates and explicit authorization are complete.

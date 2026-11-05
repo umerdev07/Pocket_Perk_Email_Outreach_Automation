@@ -18,6 +18,7 @@ from app.routers.campaign_runs import router as campaign_runs_router, runs_route
 from app.routers.approvals import router as approvals_router
 from app.routers.dashboard import router as dashboard_router
 from app.services.campaign_queue_worker import run_campaign_queue_worker
+from app.services.instantly_sync_worker import run_instantly_sync_worker
 
 
 def create_app(*, auth_enabled: bool = True, queue_worker_enabled: bool = False) -> FastAPI:
@@ -25,13 +26,17 @@ def create_app(*, auth_enabled: bool = True, queue_worker_enabled: bool = False)
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        worker_task = None
+        worker_tasks = []
         if queue_worker_enabled and settings.supabase_url and settings.supabase_service_key:
-            worker_task = asyncio.create_task(run_campaign_queue_worker(settings), name="pocketperks-pgmq-worker")
+            worker_tasks.append(asyncio.create_task(
+                run_campaign_queue_worker(settings), name="pocketperks-personalization-worker"))
+            worker_tasks.append(asyncio.create_task(
+                run_instantly_sync_worker(settings), name="pocketperks-instantly-sync-worker"))
         yield
-        if worker_task:
+        for worker_task in worker_tasks:
             worker_task.cancel()
-            await asyncio.gather(worker_task, return_exceptions=True)
+        if worker_tasks:
+            await asyncio.gather(*worker_tasks, return_exceptions=True)
 
     app = FastAPI(title="PocketPerks API", lifespan=lifespan)
     app.state.queue_worker_enabled = queue_worker_enabled

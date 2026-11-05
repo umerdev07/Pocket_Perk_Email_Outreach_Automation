@@ -276,3 +276,6 @@ body { background: var(--paper); color: var(--ink); }
 .auth-lock { color: var(--brand-green-dark); background: var(--brand-green-soft); }
 .auth-spinner { border-color: #dcebdc; border-top-color: var(--brand-green); }
 .auth-reset-link:hover:not(:disabled), .account-settings-link:hover, .header-account-link:hover { color: var(--brand-red); }
+.run-bar { margin-top: 12px; }
+.run-bar > small { display: flex; justify-content: space-between; gap: 12px; margin-bottom: 6px; color: var(--muted); font-size: 11px; }
+.run-bar > small b { color: var(--brand-green-dark); font-variant-numeric: tabular-nums; }

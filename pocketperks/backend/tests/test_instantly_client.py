@@ -24,7 +24,7 @@ class Response:
 
 
 class FakeClient:
-    outcomes, calls = [], []
+    outcomes, calls, posts = [], [], []
 
     def __init__(self, **kwargs):
         self.options = kwargs
@@ -42,9 +42,16 @@ class FakeClient:
             raise outcome
         return outcome
 
+    async def post(self, url, *, headers, json):
+        self.posts.append((url, headers, json))
+        outcome = self.outcomes.pop(0)
+        if isinstance(outcome, Exception):
+            raise outcome
+        return outcome
+
 
 def reset(*outcomes):
-    FakeClient.outcomes, FakeClient.calls = list(outcomes), []
+    FakeClient.outcomes, FakeClient.calls, FakeClient.posts = list(outcomes), [], []
 
 
 def ok(items=None, cursor=None):
@@ -113,6 +120,77 @@ def test_repeated_pagination_cursor_is_rejected():
     with patch.object(client.httpx, "AsyncClient", FakeClient):
         with pytest.raises(client.BadResponseError, match="repeated"):
             asyncio.run(client.list_sending_accounts(cfg()))
+
+
+def test_create_campaign_posts_draft_payload_without_activating_campaign():
+    campaign_id = "88a2b7d2-7609-4f82-99d6-fc1d058cd83d"
+    payload = {"name": "PocketPerks internal test", "campaign_schedule": {"schedules": []},
+               "sequences": [{"steps": []}]}
+    reset(Response(201, {"id": campaign_id, "name": payload["name"], "status": "draft"}))
+    with patch.object(client.httpx, "AsyncClient", FakeClient):
+        result = asyncio.run(client.create_campaign(payload, cfg()))
+
+    assert result == {"id": campaign_id, "name": payload["name"], "status": "draft"}
+    url, headers, sent_payload = FakeClient.posts[0]
+    assert url == "https://api.instantly.ai/api/v2/campaigns"
+    assert headers["Authorization"] == "Bearer test-instantly-key"
+    assert sent_payload == payload
+    assert not hasattr(client, "activate_campaign")
+
+
+def test_add_campaign_leads_chunks_at_provider_limit():
+    campaign_id = "88a2b7d2-7609-4f82-99d6-fc1d058cd83d"
+    leads = [{"email": f"test-{index}@example.test", "custom_variables": {"step_1_subject": "Test"}}
+             for index in range(1001)]
+    created_first = [{"index": index, "id": f"provider-{index}"} for index in range(1000)]
+    reset(Response(200, {"created_leads": created_first}),
+          Response(200, {"created_leads": [{"index": 0, "id": "provider-1000"}]}))
+    with patch.object(client.httpx, "AsyncClient", FakeClient):
+        result = asyncio.run(client.add_campaign_leads(campaign_id, leads, cfg()))
+
+    assert result["attempted"] == 1001
+    assert result["created"] == 1001
+    assert result["batches"] == 2
+    assert result["created_leads"][0] == {"index": 0, "id": "provider-0", "email": "test-0@example.test"}
+    assert result["created_leads"][-1] == {
+        "index": 1000, "id": "provider-1000", "email": "test-1000@example.test"
+    }
+    assert [len(call[2]["leads"]) for call in FakeClient.posts] == [1000, 1]
+    assert all(call[2]["campaign_id"] == campaign_id for call in FakeClient.posts)
+    assert all(call[2]["skip_if_in_campaign"] is True for call in FakeClient.posts)
+    assert all(call[0] == "https://api.instantly.ai/api/v2/leads/add" for call in FakeClient.posts)
+
+
+def test_add_campaign_leads_returns_provider_skip_counts_without_claiming_created_ids():
+    campaign_id = "88a2b7d2-7609-4f82-99d6-fc1d058cd83d"
+    reset(Response(200, {"created_leads": [{"index": 0, "id": "provider-1"}],
+                         "skipped_count": 1, "invalid_email_count": 0,
+                         "in_blocklist": 0, "duplicated_leads": 0,
+                         "duplicate_email_count": 0}))
+    with patch.object(client.httpx, "AsyncClient", FakeClient):
+        result = asyncio.run(client.add_campaign_leads(campaign_id, [
+            {"email": "one@example.test"}, {"email": "two@example.test"}
+        ], cfg()))
+    assert result["created"] == 1
+    assert result["skipped"] == 1
+    assert result["created_leads"] == [{"index": 0, "id": "provider-1", "email": "one@example.test"}]
+
+
+def test_post_timeout_is_not_retried_because_write_outcome_is_ambiguous():
+    reset(httpx.ReadTimeout("private network detail"))
+    with patch.object(client.httpx, "AsyncClient", FakeClient):
+        with pytest.raises(client.InstantlyTimeoutError, match="check provider state"):
+            asyncio.run(client.create_campaign({"name": "Test"}, cfg()))
+    assert len(FakeClient.posts) == 1
+
+
+def test_lead_payload_validation_happens_before_any_provider_call():
+    campaign_id = "88a2b7d2-7609-4f82-99d6-fc1d058cd83d"
+    reset()
+    with patch.object(client.httpx, "AsyncClient", FakeClient):
+        with pytest.raises(ValueError, match="non-empty email"):
+            asyncio.run(client.add_campaign_leads(campaign_id, [{"email": "  "}], cfg()))
+    assert FakeClient.posts == []
 
 
 @pytest.mark.skipif(os.getenv("RUN_INSTANTLY_READ_TEST") != "1",

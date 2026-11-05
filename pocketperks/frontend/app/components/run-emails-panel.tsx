@@ -12,9 +12,9 @@ type PersonalizedEmail = {
 };
 type EmailPage = { items: PersonalizedEmail[]; total: number; has_more: boolean };
 type LeadEmailDetail = { lead: Lead; items: PersonalizedEmail[] };
-type Props = { apiBase: string; runId: string; processed: number; status: string };
+type Props = { apiBase: string; runId: string; processed: number; status: string; onGeneratedCount: (count: number) => void };
 
-export default function RunEmailsPanel({ apiBase, runId, processed, status }: Props) {
+export default function RunEmailsPanel({ apiBase, runId, processed, status, onGeneratedCount }: Props) {
   const [items, setItems] = useState<PersonalizedEmail[]>([]);
   const [total, setTotal] = useState(0);
   const [hasMore, setHasMore] = useState(false);
@@ -65,6 +65,29 @@ export default function RunEmailsPanel({ apiBase, runId, processed, status }: Pr
   // Refresh as chunk progress advances; this keeps new generated emails visible during the run.
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [apiBase, runId, processed, status]);
+
+  // Poll the exact saved-email count while generation is running. Lead progress
+  // is chunked, but each completed email row can appear between those chunks.
+  useEffect(() => {
+    let active = true;
+    let timer: ReturnType<typeof setTimeout>;
+    const refreshGeneratedCount = async () => {
+      try {
+        const response = await apiFetch(`${apiBase}/api/campaign-runs/${runId}/emails?limit=1&offset=0`);
+        const data = await response.json() as EmailPage & { detail?: string };
+        if (!response.ok) throw new Error(data.detail || "Could not refresh generated email count.");
+        if (active) {
+          setTotal(data.total);
+          onGeneratedCount(data.total);
+        }
+      } catch {
+        // The run-progress endpoint remains visible if this count poll is briefly unavailable.
+      }
+      if (active && status === "running") timer = setTimeout(refreshGeneratedCount, 1200);
+    };
+    void refreshGeneratedCount();
+    return () => { active = false; clearTimeout(timer); };
+  }, [apiBase, runId, status, onGeneratedCount]);
 
   async function loadMore() {
     if (moreBusy || !hasMore) return;

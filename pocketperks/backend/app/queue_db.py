@@ -72,3 +72,41 @@ async def reset_run_for_retry(settings: Settings, run_id: str) -> None:
         )
     if not response.is_success:
         raise RuntimeError("Could not prepare the campaign run for a safe retry.")
+
+
+async def read_instantly_sync_jobs(settings: Settings, *, visibility_seconds: int = 300,
+                                  quantity: int = 1) -> list[dict]:
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            response = await client.post(_rpc_url(settings, "read_instantly_sync_jobs"),
+                headers=_headers(settings), json={"visibility_seconds": visibility_seconds, "quantity": quantity})
+    except httpx.HTTPError as exc:
+        raise RuntimeError("Could not reach the durable Instantly sync queue.") from exc
+    if not response.is_success or not isinstance(response.json(), list):
+        raise RuntimeError("Could not read the durable Instantly sync queue.")
+    return response.json()
+
+
+async def extend_instantly_sync_job(settings: Settings, message_id: int, *, visibility_seconds: int = 300) -> bool:
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            response = await client.post(_rpc_url(settings, "extend_instantly_sync_job"),
+                headers=_headers(settings), json={"target_message_id": message_id,
+                                                  "visibility_seconds": visibility_seconds})
+    except httpx.HTTPError as exc:
+        raise RuntimeError("Could not renew the Instantly sync queue lease.") from exc
+    if not response.is_success:
+        raise RuntimeError("Could not renew the Instantly sync queue lease.")
+    return response.json() is True
+
+
+async def archive_instantly_sync_job(settings: Settings, message_id: int) -> bool:
+    try:
+        async with httpx.AsyncClient(timeout=15) as client:
+            response = await client.post(_rpc_url(settings, "archive_instantly_sync_job"),
+                headers=_headers(settings), json={"target_message_id": message_id})
+    except httpx.HTTPError as exc:
+        raise RuntimeError("Could not archive the Instantly sync queue job.") from exc
+    if not response.is_success:
+        raise RuntimeError("Could not archive the Instantly sync queue job.")
+    return response.json() is True
