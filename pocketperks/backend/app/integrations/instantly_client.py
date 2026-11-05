@@ -59,7 +59,8 @@ class InstantlyRequestError(InstantlyError):
 class InstantlyWriteError(InstantlyRequestError):
     """A provider-side write failed; messages contain no raw response data."""
 
-    def __init__(self, message: str, *, status_code: int | None = None, outcome_unknown: bool = False):
+    def __init__(self, message: str, *, status_code: int | None = None,
+                 outcome_unknown: bool = False):
         super().__init__(message)
         self.status_code = status_code
         self.outcome_unknown = outcome_unknown
@@ -163,8 +164,20 @@ def _write_error(response: httpx.Response, action: str) -> None:
             status_code=response.status_code,
             outcome_unknown=True,
         )
+    provider_reason = None
+    try:
+        error_payload = response.json()
+    except (ValueError, TypeError):
+        error_payload = None
+    if isinstance(error_payload, dict):
+        for field in ("message", "detail", "error"):
+            value = error_payload.get(field)
+            if isinstance(value, str) and value.strip():
+                provider_reason = " ".join(value.split())[:160]
+                break
+    reason = f": {provider_reason}" if provider_reason else ""
     raise InstantlyWriteError(
-        f"Instantly rejected {action} (HTTP {response.status_code}).",
+        f"Instantly rejected {action} (HTTP {response.status_code}){reason}.",
         status_code=response.status_code,
     )
 
