@@ -19,6 +19,7 @@ _QUOTED_REPLY_MARKER = re.compile(
     r"^\s*(?:On .{3,220}wrote:|-{2,}\s*Original Message\s*-{2,}|From:\s+.+|>|_{5,}\s*$)",
     re.IGNORECASE,
 )
+_INLINE_QUOTED_REPLY_MARKER = re.compile(r"\bOn .{3,220}?wrote:\s*", re.IGNORECASE)
 
 
 def _explicit_opt_out(body: str) -> bool:
@@ -26,6 +27,11 @@ def _explicit_opt_out(body: str) -> bool:
     new_lines = []
     for line in body.replace("\r\n", "\n").replace("\r", "\n").split("\n"):
         if _QUOTED_REPLY_MARKER.match(line):
+            break
+        inline_quote = _INLINE_QUOTED_REPLY_MARKER.search(line)
+        if inline_quote:
+            line = line[:inline_quote.start()]
+            new_lines.append(line)
             break
         new_lines.append(line)
     new_text = " ".join(new_lines).strip()
