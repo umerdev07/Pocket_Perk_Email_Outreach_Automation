@@ -52,6 +52,7 @@ export default function LeadReplies({ apiBase, canManageSuppressions = false }: 
   const [releaseConsent, setReleaseConsent] = useState(false);
   const [notice, setNotice] = useState("");
   const [replyDrafts, setReplyDrafts] = useState<Record<string, string>>({});
+  const [replyFeedback, setReplyFeedback] = useState<Record<string, { kind: "success" | "error"; text: string }>>({});
   const [sendReplyBusy, setSendReplyBusy] = useState("");
 
   const loadReplies = useCallback(async (showLoading = true) => {
@@ -189,6 +190,7 @@ export default function LeadReplies({ apiBase, canManageSuppressions = false }: 
     const body = (replyDrafts[reply.id] || "").trim();
     if (!body) return;
     setSendReplyBusy(reply.id); setError(""); setNotice("");
+    setReplyFeedback(current => ({ ...current, [reply.id]: { kind: "success", text: "Sending through Instantly…" } }));
     try {
       const response = await apiFetch(`${apiBase}/api/lead-replies/${reply.id}/reply`, {
         method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ body }),
@@ -196,9 +198,11 @@ export default function LeadReplies({ apiBase, canManageSuppressions = false }: 
       const data = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(data.detail || "Could not send reply through Instantly.");
       setReplyDrafts(current => ({ ...current, [reply.id]: "" }));
-      setNotice("Reply sent through Instantly on the existing email thread.");
+      setReplyFeedback(current => ({ ...current, [reply.id]: { kind: "success", text: "Reply sent through Instantly on the existing email thread." } }));
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Could not send reply.");
+      const message = cause instanceof Error ? cause.message : "Could not send reply.";
+      setError(message);
+      setReplyFeedback(current => ({ ...current, [reply.id]: { kind: "error", text: message } }));
     } finally { setSendReplyBusy(""); }
   }
 
@@ -288,6 +292,8 @@ export default function LeadReplies({ apiBase, canManageSuppressions = false }: 
                 <div><small>Sent from {reply.sender_account_email || "the original connected mailbox"}</small>
                   <button type="submit" className="action-button" disabled={sendReplyBusy === reply.id || !replyDrafts[reply.id]?.trim()}>
                     {sendReplyBusy === reply.id ? "Sending…" : "Send reply"}</button></div>
+                {replyFeedback[reply.id] && <p role={replyFeedback[reply.id].kind === "error" ? "alert" : "status"}
+                  className={replyFeedback[reply.id].kind === "error" ? "error" : "success"}>{replyFeedback[reply.id].text}</p>}
               </form>}
               <div className="reply-actions"><button type="button" className="secondary-button reply-delete-button" disabled={deleteBusy === reply.id} onClick={() => void deleteLeadReply(reply)} aria-label="Delete reply from Instantly and PocketPerks"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M10 11v6m4-6v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg>{deleteBusy === reply.id ? "Deleting…" : "Delete reply"}</button>
                 <button type="button" className="secondary-button" disabled={reply.opted_out || optOutBusy === reply.id} onClick={() => void markOptOut(reply)}>{reply.opted_out ? "Opt-out recorded" : optOutBusy === reply.id ? "Saving opt-out…" : "Mark as opt-out"}</button>

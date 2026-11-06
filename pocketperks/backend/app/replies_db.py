@@ -45,6 +45,21 @@ def _explicit_opt_out(body: str) -> bool:
     return bool(new_text and (_OPT_OUT_RE.search(new_text) or re.fullmatch(r"stop[.!\s]*", new_text, re.I)))
 
 
+def _reply_mailbox_address(item: dict) -> str | None:
+    """Resolve Instantly's mailbox reference to the actual account email."""
+    account = normalize_email(item.get("eaccount"))
+    if account:
+        return account
+    recipients = item.get("to_address_email_list")
+    if isinstance(recipients, str):
+        candidates = recipients.split(",")
+    elif isinstance(recipients, list):
+        candidates = [value.get("email") if isinstance(value, dict) else value for value in recipients]
+    else:
+        candidates = []
+    return next((email for value in candidates if (email := normalize_email(value))), None)
+
+
 def _base(settings: Settings) -> str:
     if not settings.supabase_url or not settings.supabase_service_key:
         raise HTTPException(status_code=503, detail="Database is not configured for lead replies.")
@@ -154,7 +169,7 @@ async def save_received_replies(settings: Settings, emails: list[dict]) -> int:
                 "lead_id": lead.get("id") if lead else None,
                 "campaign_id": campaign_id,
                 "from_email": sender.strip().lower(),
-                "sender_account_email": str(item.get("eaccount") or "").strip().lower() or None,
+                "sender_account_email": _reply_mailbox_address(item),
                 "subject": str(item.get("subject") or "(no subject)")[:500],
                 "body": body[:20000],
                 "instantly_id": provider_id,
@@ -177,6 +192,21 @@ async def save_received_replies(settings: Settings, emails: list[dict]) -> int:
                                          headers=_headers(settings, "resolution=ignore-duplicates,return=representation"),
                                          json=chunk)
             inserted += len(_rows(response, "Could not save replies to the PocketPerks workspace."))
+        # Earlier syncs may have inserted the same reply before sender mailbox
+        # metadata was stored. Backfill only the nullable field, preserving local
+        # read/opt-out state and the original message contents.
+        mailbox_groups: dict[str, list[str]] = {}
+        for row in pending:
+            if row.get("sender_account_email"):
+                mailbox_groups.setdefault(row["sender_account_email"], []).append(row["instantly_id"])
+        for mailbox, provider_ids in mailbox_groups.items():
+            for offset in range(0, len(provider_ids), 100):
+                chunk = provider_ids[offset:offset + 100]
+                response = await client.patch(f"{base}/replies", params={
+                    "instantly_id": f"in.({','.join(chunk)})", "sender_account_email": "is.null",
+                }, headers=_headers(settings, "return=minimal"), json={"sender_account_email": mailbox})
+                if not response.is_success:
+                    raise HTTPException(status_code=503, detail="Could not save the original sending mailbox for replies.")
     return inserted
 
 
