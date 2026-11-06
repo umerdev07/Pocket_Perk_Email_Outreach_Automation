@@ -1,5 +1,8 @@
 """Database operations for starting a campaign run."""
 import asyncio
+import math
+from datetime import datetime, timedelta
+from zoneinfo import ZoneInfo
 
 import httpx
 from fastapi import HTTPException
@@ -22,13 +25,15 @@ def _headers(settings: Settings, prefer: str | None = None) -> dict[str, str]:
 
 
 async def start_campaign_run(settings: Settings, campaign_id: str, batch_id: str,
-                             sender_emails: list[str] | None = None) -> dict:
+                             sender_emails: list[str] | None = None,
+                             sender_accounts: list[dict] | None = None) -> dict:
     """Validate both records and create a run; no lead processing happens here."""
     base = _base(settings)
     headers = _headers(settings)
     async with httpx.AsyncClient(timeout=15) as client:
         campaign_response = await client.get(f"{base}/campaigns", params={
-            "select": "id,status", "id": f"eq.{campaign_id}", "limit": "1",
+            "select": "id,status,start_at,end_at,timezone,campaign_steps(step_number,delay_days)",
+            "id": f"eq.{campaign_id}", "limit": "1",
         }, headers=headers)
         if not campaign_response.is_success:
             raise HTTPException(status_code=503, detail="Could not verify the campaign.")
@@ -48,6 +53,17 @@ async def start_campaign_run(settings: Settings, campaign_id: str, batch_id: str
             raise HTTPException(status_code=404, detail="Lead batch not found.")
         total_leads = int(batches[0]["imported_count"])
 
+        if sender_accounts:
+            estimate = _campaign_window_estimate(campaigns[0], total_leads, sender_accounts)
+            if estimate and estimate["too_short"]:
+                raise HTTPException(
+                    status_code=422,
+                    detail=(f"This campaign window is too short for the selected batch and inboxes. "
+                            f"Allow about {estimate['required_days']} calendar day(s) for the estimated "
+                            f"sending capacity and saved follow-up delays; extend the campaign end date/time "
+                            f"before starting. This is an estimate, not a delivery guarantee."),
+                )
+
         run_response = await client.post(f"{base}/campaign_runs", headers=_headers(settings, "return=representation"), json={
             "campaign_id": campaign_id,
             "batch_id": batch_id,
@@ -62,6 +78,56 @@ async def start_campaign_run(settings: Settings, campaign_id: str, batch_id: str
             raise HTTPException(status_code=503, detail="Could not create the campaign run.")
     row = run_response.json()[0]
     return {"run_id": row["id"], "status": row["status"], "total_leads": row["total_leads"]}
+
+
+def _campaign_window_estimate(campaign: dict, total_leads: int,
+                              sender_accounts: list[dict]) -> dict | None:
+    """Conservative preflight from the configured daily window and mailbox limits."""
+    try:
+        start = datetime.fromisoformat(str(campaign["start_at"]).replace("Z", "+00:00"))
+        end = datetime.fromisoformat(str(campaign["end_at"]).replace("Z", "+00:00"))
+        if start.tzinfo is None or end.tzinfo is None or end <= start:
+            return None
+        zone = ZoneInfo(str(campaign.get("timezone") or "UTC"))
+        local_start, local_end = start.astimezone(zone), end.astimezone(zone)
+        start_minute = local_start.hour * 60 + local_start.minute
+        end_minute = local_end.hour * 60 + local_end.minute
+        window_minutes = end_minute - start_minute if end_minute > start_minute else 1440
+        steps = sorted(campaign.get("campaign_steps") or [], key=lambda row: row.get("step_number", 0))
+        if not steps:
+            return None
+        followup_days = sum(max(0, int(step.get("delay_days") or 0)) for step in steps[1:])
+    except (KeyError, TypeError, ValueError, OverflowError):
+        return None
+
+    capacity_per_window = 0
+    for account in sender_accounts:
+        try:
+            daily_limit = int(float(account.get("daily_limit")))
+            sending_gap = float(account.get("sending_gap") or 0)
+        except (TypeError, ValueError):
+            continue
+        if daily_limit <= 0:
+            continue
+        gap_capacity = math.floor(window_minutes / sending_gap) if sending_gap > 0 else daily_limit
+        capacity_per_window += max(1, min(daily_limit, gap_capacity))
+    if capacity_per_window <= 0:
+        return None
+
+    total_messages = total_leads * len(steps)
+    sending_windows = max(1, math.ceil(total_messages / capacity_per_window))
+    required_days = sending_windows + followup_days
+    available_calendar_days = (local_end.date() - local_start.date()).days + 1
+    available_sending_days = sum(
+        (local_start.date() + timedelta(days=offset)).weekday() < 5
+        for offset in range(available_calendar_days)
+    )
+    return {
+        "required_days": required_days,
+        "available_days": available_calendar_days,
+        "too_short": (sending_windows > available_sending_days
+                      or required_days > available_calendar_days),
+    }
 
 
 async def get_campaign_run(settings: Settings, run_id: str) -> dict | None:
@@ -102,6 +168,13 @@ async def get_campaign_run_instantly_status(settings: Settings, run_id: str) -> 
                     "error_detail": None, "sender_account_emails": []}
         mapping = rows[0]
         mapping_id = str(mapping["id"])
+        run_response = await client.get(f"{base}/campaign_runs", params={
+            "select": "total_leads", "id": f"eq.{run_id}", "limit": "1",
+        }, headers=_headers(settings))
+        if not run_response.is_success:
+            raise HTTPException(status_code=503, detail="Could not load campaign lead total for Instantly sync.")
+        run_rows = run_response.json()
+        expected_leads = int(run_rows[0].get("total_leads") or 0) if isinstance(run_rows, list) and run_rows else 0
         counts = await asyncio.gather(*[
             _count_run_lead_mappings(client, base, settings, mapping_id, status)
             for status in ("synced", "pending", "failed", "skipped", "unknown")
@@ -113,6 +186,18 @@ async def get_campaign_run_instantly_status(settings: Settings, run_id: str) -> 
         # actual state while recovery reuses that same provider campaign.
         mapping_status = "awaiting_review"
         error_detail = "Waiting for personalized email review before lead sync."
+    mapped_leads = sum(counts)
+    unresolved_leads = counts[1] + counts[2] + counts[4]
+    # A worker can stop after Instantly and Supabase confirmed every lead but
+    # before it finalized the campaign mapping. Derive the truthful UI state;
+    # the sync recovery worker will also reconcile the durable mapping state.
+    fully_reconciled = (expected_leads > 0 and mapped_leads >= expected_leads
+                        and unresolved_leads == 0 and counts[0] > 0)
+    if mapping_status == "syncing_leads" and fully_reconciled:
+        mapping_status = "leads_synced"
+    if (mapping_status == "failed" and error_detail == "No eligible leads synced to Instantly."
+            and fully_reconciled):
+        mapping_status, error_detail = "leads_synced", None
     return {"run_id": run_id, "status": mapping_status,
             "instantly_campaign_id": mapping.get("instantly_campaign_id"),
             "synced_leads": counts[0], "pending_leads": counts[1], "failed_leads": counts[2],

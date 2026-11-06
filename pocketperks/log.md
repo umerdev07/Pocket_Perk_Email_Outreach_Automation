@@ -306,3 +306,12 @@ This log records completed work and verification reported in this project chat. 
 - Added safeguards against unsupported outcomes/prices/rewards, implying conversations that did not happen, placeholder leakage, and fake reply/forward subjects. The existing application-owned `reply STOP` opt-out line remains appended after generation.
 - No frontend, schema, migration, approval-state, suppression, Instantly sync/launch, or schedule behavior changed. Existing campaign form fields and imported category are sufficient to use the guidance.
 - Python syntax compilation and `git diff --check` passed. Automated tests, frontend build, deployment, and Git push have not been run/performed for this stage.
+
+## Stage 7.4 — Schedule-aware sequence timing and Instantly sync recovery (2026-11-06)
+- Removed the backend's global 4-hour follow-up override. Provider sequence steps now take their delay from `campaign_steps.delay_days`; Instantly applies the campaign's daily sending schedule to each step and paces leads using the selected inbox limits.
+- Start Campaign now estimates workload from batch size, selected inbox limits/gaps, and saved step delays. It warns and blocks the run if the campaign end window is shorter than the estimated sequence completion time.
+- Sync recovery now revisits mappings left in `syncing_leads` and reconciles `unknown` lead writes against Instantly before any retry. The status endpoint reports `leads_synced` when every run lead has a confirmed terminal mapping, even if the worker missed its final status update.
+- No migration is required. Existing Instantly campaigns are not modified retroactively; this behavior applies when a run creates or syncs its campaign under the updated backend.
+- Supabase read-only verification query for a run: join `instantly_campaign_mappings` and `instantly_lead_mappings`, grouped by mapping and lead status; keep run ID in the operator's verification notes.
+
+- Campaign preflight now estimates all email-step sends against selected Instantly inbox daily limits, sending gaps, weekday windows and saved follow-up delays. The frontend and API reject starting a new run if the chosen campaign window is too short, preventing a configured stop date from closing a run with queued emails. This estimate is advisory about provider throughput, not inbox placement.

@@ -23,9 +23,8 @@ LEGACY_SCHEDULE_TIMEZONE = "Asia/Karachi"
 
 
 def build_campaign_payload(campaign: dict[str, Any], steps: list[dict[str, Any]], *,
-                           delay_hours: int = 4,
                            sender_emails: list[str] | None = None) -> dict[str, Any]:
-    """Build one inactive Instantly sequence using per-lead merge variables."""
+    """Build one inactive Instantly sequence using campaign step delays and merge variables."""
     if not isinstance(campaign, dict) or not str(campaign.get("name", "")).strip():
         raise ValueError("Campaign name is required for Instantly sync.")
     start_at, end_at = campaign.get("start_at"), campaign.get("end_at")
@@ -65,8 +64,6 @@ def build_campaign_payload(campaign: dict[str, Any], steps: list[dict[str, Any]]
     else:
         # Legacy date-only campaign records retain their previous office hours.
         daily_start, daily_end = "09:00", "17:00"
-    if type(delay_hours) is not int or not 1 <= delay_hours <= 72:
-        raise ValueError("Follow-up delay must be between 1 and 72 hours.")
     if not isinstance(steps, list) or not steps:
         raise ValueError("At least one campaign step is required.")
 
@@ -75,14 +72,21 @@ def build_campaign_payload(campaign: dict[str, Any], steps: list[dict[str, Any]]
     for index, step in enumerate(ordered, start=1):
         if step.get("step_number") != index:
             raise ValueError("Campaign steps must be numbered consecutively from 1.")
+        delay_days = step.get("delay_days")
+        if type(delay_days) is not int or delay_days < 0:
+            raise ValueError("Every campaign step needs a non-negative delay in days.")
+        if index == 1 and delay_days != 0:
+            raise ValueError("The first campaign email must have a zero-day delay.")
         draft = step.get("draft")
         draft_approved = isinstance(draft, dict) and draft.get("status") == "approved"
         if step.get("status") != "approved" and step.get("draft_status") != "approved" and not draft_approved:
             raise ValueError("Every campaign step must have an approved generic draft.")
         sequence_steps.append({
             "type": "email",
-            "delay": 0 if index == 1 else delay_hours,
-            "delay_unit": "hours",
+            # The campaign's saved step delay is authoritative. Instantly then
+            # sends each lead only inside its configured daily sending window.
+            "delay": delay_days,
+            "delay_unit": "days",
             "variants": [{
                 "subject": "{{pp_email_" + str(index) + "_subject}}",
                 "body": "{{pp_email_" + str(index) + "_body}}",
@@ -201,7 +205,6 @@ async def sync_completed_run(settings: Settings, run_id: str) -> dict[str, Any]:
     if mapping.get("status") == "failed" and not retryable_sync_failure:
         raise RuntimeError("Instantly campaign mapping is failed; reconcile provider state before retrying.")
     campaign_payload = build_campaign_payload(campaign, campaign["steps"],
-                                              delay_hours=settings.instantly_followup_delay_hours,
                                               sender_emails=sender_emails)
     if not provider_campaign_id:
         if mapping.get("status") == "failed":

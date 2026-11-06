@@ -43,7 +43,8 @@ async def start_campaign(campaign_id: UUID, payload: StartCampaignRequest, reque
                  for account in accounts if is_sending_account_ready(account)}
     if any(email not in available for email in selected):
         raise HTTPException(status_code=422, detail="Choose only active, connected Instantly sending inboxes.")
-    result = await start_campaign_run(settings, str(campaign_id), str(payload.batch_id), selected)
+    result = await start_campaign_run(settings, str(campaign_id), str(payload.batch_id), selected,
+                                     sender_accounts=[available[email] for email in selected])
     # The factory's worker-disabled mode is reserved for isolated tests/local
     # embedding. The normal module app enables the durable PGMQ worker.
     if not request.app.state.queue_worker_enabled:

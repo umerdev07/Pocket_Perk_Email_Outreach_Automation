@@ -32,13 +32,15 @@ async def create_campaign(settings: Settings, campaign: dict, contexts: list[str
 async def list_campaigns(settings: Settings) -> list[dict]:
     async with httpx.AsyncClient(timeout=15) as client:
         response = await client.get(f"{_base(settings)}/campaigns", params={
-            "select": "id,name,total_emails,start_date,end_date,start_at,end_at,timezone,status,created_at,campaign_runs(id)", "order": "created_at.desc",
+            "select": "id,name,total_emails,start_date,end_date,start_at,end_at,timezone,status,created_at,campaign_steps(step_number,delay_days),campaign_runs(id)", "order": "created_at.desc",
         }, headers=_headers(settings))
     if not response.is_success:
         raise HTTPException(status_code=503, detail="Could not load campaigns.")
     campaigns = response.json()
     for campaign in campaigns:
         campaign["has_runs"] = bool(campaign.pop("campaign_runs", []))
+        campaign["steps"] = sorted(campaign.pop("campaign_steps", []),
+                                   key=lambda step: step.get("step_number", 0))
     return campaigns
 
 

@@ -320,7 +320,7 @@ Unique indexes: `email`, `domain`. Rejected, duplicate aur invalid rows `leads` 
 | step\_number | int | unique (campaign\_id, step\_number) |
 | context | text | user ka Email N Context |
 | delay\_value | numeric | step 1 = 0; follow-up delay configured value |
-| delay\_unit | text | `hours` / `days` / `minutes`; follow-up default unit `hours` (exact default value pending) |
+| delay\_unit | text | `hours` / `days` / `minutes`; sequence follows each saved campaign step's `delay_days` |
 
 **generic\_drafts**
 
@@ -460,7 +460,7 @@ Koi fake business data repo mein nahi. Testing ke liye user apni asli (ya sample
 - Tay: har marketing email mein sender identity aur opt-out tareeqa hoga; opt-outs future sends se suppress honge. Individual subscriber eligibility ko send se pehle handle karna hoga.
 
 * [ ] Client se sender postal address/footer format confirm karna.
-* [x] Follow-up default 4-hour delay; Instantly schedule/sequence mein 4 hours configured.
+* [x] Removed the global 4-hour override. Instantly sequence steps now use the saved `campaign_steps.delay_days` value (step 1 is 0; later steps currently default to 3 days). Instantly applies the campaign's daily sending schedule to each step; provider pacing and mailbox daily limits control how leads are spread inside that window.
 * [x] Sample lead file (9 rows) controlled pilot mein import hui.
 * [x] Instantly API v2 account/key configured; secret ko expose na karein.
 * [x] Instantly v2 sequence planned steps support karta hai; lead sync 1000-provider maximum se chhote chunks mein hota hai.
@@ -468,7 +468,7 @@ Koi fake business data repo mein nahi. Testing ke liye user apni asli (ya sample
 
 ### Campaign scheduling requirements (confirmed)
 - Campaign start/end date-time browser ke local IANA timezone ke saath save hote hain; backend absolute timestamps store karke timezone Instantly ko deta hai. Migration `016_campaign_datetime_window.sql` ke baad exact-time activation aur end-time pause workers implemented hain. Local Docker host online rehna zaroori hai, warna PocketPerks lifecycle actions late ho sakte hain.
-- Instantly sequence delay and sending window must respect the configured follow-up delay and provider limits. Never activate before the start time or continue past the end time. If the window cannot fit the configured steps safely, hold the run and show a clear reason instead of sending all steps together.
+- Instantly sequence delay comes from each saved campaign step (`delay_days`); never replace it with a global fixed-hour value or set a follow-up to zero. Instantly applies the same active daily sending window to every step and spaces each lead's messages according to its configured delay. Estimate total sequence volume against selected mailbox daily limits, sending gaps, weekdays and saved follow-up delays. Block a new run when the selected campaign window is too short, at both the frontend and API, and show the approximate minimum duration. Never activate before the start time or continue past the end time.
 - Sending must use a durable database-backed queue/scheduler and idempotent worker so queued messages survive app/browser closure, server restarts, and worker retries. Never mark `sent` until Instantly confirms a successful send.
 - Starting a campaign chosen imported batch, approved campaign aur selected sending inboxes ka backend handoff hai: personalization, risk routing, lead sync, scheduling aur (explicitly enabled hone par) provider activation backend mein hote hain. Browser close karne se kaam cancel nahi hota. Live mode sirf controlled recipients ke liye client approval ke saath rakhein.
 - Replies must sync into the PocketPerks inbox and be linked back to the lead/campaign/email when possible. Reply sync remains part of Stage 7 delivery completion.
@@ -494,6 +494,8 @@ Koi fake business data repo mein nahi. Testing ke liye user apni asli (ya sample
 - Stage 8 inbox now includes authenticated reply listing/read state, Instantly polling, bounded cursor continuation, idempotent storage, unmatched-reply visibility, and an in-app reply action restricted to an existing Instantly thread. Reply sending requires the Instantly `emails:create` scope and migration 029 to store the original sender mailbox. Provider-side mark-read and a complete multi-message thread timeline remain outside the current UI.
 - Reply inbox now separates the newest reply text from quoted history and supports read-state, campaign, received-date and search filters. Dashboard chart endpoints aggregate 14-day lead/reply activity and current personalized-email statuses in Postgres; apply `pocketperks/supabase/migrations/018_dashboard_activity.sql` to enable chart data. No provider sending actions were added.
 - PocketPerks now polls Instantly's read-only sent-email history for mapped campaigns and marks a local `queued` draft `sent` only when campaign, mapped lead (or recipient fallback) and subject match a provider sent record. The dashboard queued metric now means awaiting provider confirmation. The send-status poll shares the existing low-frequency inbox worker and stays below the email-list API rate limit; it does not activate or send campaigns.
+- Sending estimates in Start Campaign use the selected inbox daily limits/gaps and the batch size to show approximate first-touch capacity and the saved follow-up delay; the estimate uses all lead-step emails, selected inbox daily limits/gaps, weekdays and saved follow-up delays. Starting is blocked when the campaign window is too short, at both the frontend and API. Estimates remain approximate because Instantly controls actual sending. This is a planning estimate, not a delivery or inbox-placement guarantee.
+- Instantly sync recovery now revisits mappings left in `syncing_leads`, including `unknown` lead writes. If every run lead has a persisted `synced`/`skipped` outcome and there are no pending, unknown, or failed outcomes, the status endpoint reports `leads_synced` even if a worker stopped before writing the final campaign status. Recovery then finalizes the durable mapping without reposting provider-confirmed leads.
 
 ### Suppression release and audit controls
 - Added migration 020 for active/released suppression state and an event audit table; it backfills the existing suppression list. Backend RPCs make suppression/reactivation and audited admin release atomic.
