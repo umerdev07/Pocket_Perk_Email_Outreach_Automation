@@ -17,7 +17,7 @@ from app.integrations.instantly_client import (BadResponseError, InstantlyError,
                                                list_campaign_leads)
 from app.suppression_db import get_suppressed_emails
 
-INSTANTLY_SCHEDULE_TIMEZONE = "Asia/Karachi"
+LEGACY_SCHEDULE_TIMEZONE = "Asia/Karachi"
 
 
 def build_campaign_payload(campaign: dict[str, Any], steps: list[dict[str, Any]], *,
@@ -34,7 +34,7 @@ def build_campaign_payload(campaign: dict[str, Any], steps: list[dict[str, Any]]
             end_dt = datetime.fromisoformat(str(end_at).replace("Z", "+00:00"))
             if start_dt.tzinfo is None or end_dt.tzinfo is None:
                 raise ValueError
-            schedule_timezone = ZoneInfo(INSTANTLY_SCHEDULE_TIMEZONE)
+            schedule_timezone = ZoneInfo(str(campaign.get("timezone") or LEGACY_SCHEDULE_TIMEZONE))
             start = start_dt.astimezone(schedule_timezone).date()
             end = end_dt.astimezone(schedule_timezone).date()
         except (ValueError, TypeError) as exc:
@@ -87,7 +87,7 @@ def build_campaign_payload(campaign: dict[str, Any], steps: list[dict[str, Any]]
                 "timing": {"from": "09:00", "to": "17:00"},
                 "days": {"0": False, "1": True, "2": True, "3": True,
                          "4": True, "5": True, "6": False},
-                "timezone": INSTANTLY_SCHEDULE_TIMEZONE,
+                "timezone": str(campaign.get("timezone") or LEGACY_SCHEDULE_TIMEZONE),
             }],
         },
         "sequences": [{"steps": sequence_steps}],

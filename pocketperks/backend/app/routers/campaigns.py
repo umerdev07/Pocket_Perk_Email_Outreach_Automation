@@ -17,6 +17,7 @@ class CampaignCreate(BaseModel):
     instructions: str = Field(min_length=1)
     start_at: datetime | None = None
     end_at: datetime | None = None
+    timezone: str = "Europe/London"
     # Backward-compatible date-only input for existing API clients.
     start_date: date | None = None
     end_date: date | None = None
@@ -28,7 +29,10 @@ class CampaignCreate(BaseModel):
             raise ValueError("contexts must contain one item per email step")
         if any(not context.strip() for context in self.contexts):
             raise ValueError("each context must contain non-empty text")
-        london = ZoneInfo("Europe/London")
+        try:
+            campaign_zone = ZoneInfo(self.timezone)
+        except (TypeError, ValueError, KeyError) as exc:
+            raise ValueError("Provide a valid IANA timezone for this campaign.") from exc
         if self.start_at is None and self.start_date is not None:
             self.start_at = datetime.combine(self.start_date, time.min)
         if self.end_at is None and self.end_date is not None:
@@ -36,13 +40,13 @@ class CampaignCreate(BaseModel):
         if self.start_at is None or self.end_at is None:
             raise ValueError("Provide campaign start and end date and time.")
         if self.start_at.tzinfo is None:
-            self.start_at = _resolve_london_local_time(self.start_at, london)
+            self.start_at = _resolve_local_time(self.start_at, campaign_zone)
         if self.end_at.tzinfo is None:
-            self.end_at = _resolve_london_local_time(self.end_at, london)
+            self.end_at = _resolve_local_time(self.end_at, campaign_zone)
         if self.end_at <= self.start_at:
             raise ValueError("Campaign end time must be after its start time.")
-        self.start_date = self.start_at.astimezone(london).date()
-        self.end_date = self.end_at.astimezone(london).date()
+        self.start_date = self.start_at.astimezone(campaign_zone).date()
+        self.end_date = self.end_at.astimezone(campaign_zone).date()
         return self
 
 
@@ -50,15 +54,15 @@ class CampaignUpdate(CampaignCreate):
     """Full replacement of editable campaign setup before its first run."""
 
 
-def _resolve_london_local_time(value: datetime, zone: ZoneInfo) -> datetime:
-    """Interpret datetime-local form values as UK time and reject DST gaps/folds."""
+def _resolve_local_time(value: datetime, zone: ZoneInfo) -> datetime:
+    """Interpret datetime-local values in the supplied IANA zone; reject DST gaps/folds."""
     candidate = value.replace(tzinfo=zone)
     round_trip = candidate.astimezone(UTC).astimezone(zone).replace(tzinfo=None)
     if round_trip != value:
-        raise ValueError("This local time does not exist in the UK because of a clock change.")
+        raise ValueError("This local time does not exist in the selected timezone because of a clock change.")
     other_fold = value.replace(tzinfo=zone, fold=1)
     if candidate.utcoffset() != other_fold.utcoffset():
-        raise ValueError("This local time is ambiguous in the UK because of a clock change.")
+        raise ValueError("This local time is ambiguous in the selected timezone because of a clock change.")
     return candidate
 
 
