@@ -176,6 +176,7 @@ async def sync_completed_run(settings: Settings, run_id: str) -> dict[str, Any]:
         and mapping.get("error_detail") in {
             "Some provider lead outcomes need reconciliation; those leads will not be resent.",
             "Some provider lead outcomes need reconciliation; they will be checked before retry.",
+            "No eligible leads synced to Instantly.",
         }
     )
     if mapping.get("status") == "failed" and not retryable_sync_failure:
@@ -214,6 +215,7 @@ async def sync_completed_run(settings: Settings, run_id: str) -> dict[str, Any]:
         })
 
     counts = {"synced": 0, "skipped": 0, "failed": 0, "unknown": 0}
+    held_for_review = 0
     offset, page_size, provider_batch_size = 0, 500, 100
     step_count = len(campaign["steps"])
     while True:
@@ -244,6 +246,7 @@ async def sync_completed_run(settings: Settings, run_id: str) -> dict[str, Any]:
             if (len(emails) != step_count or any(item.get("status") != "queued" for item in emails)
                     or any(item.get("step_number") != index for index, item in enumerate(emails, start=1))):
                 counts["skipped"] += 1
+                held_for_review += 1
                 held_mapping_rows.append({"lead_id": str(lead["id"]), "status": "pending",
                                           "error_detail": "Held until every campaign email step is queued after review."})
                 continue
@@ -251,6 +254,7 @@ async def sync_completed_run(settings: Settings, run_id: str) -> dict[str, Any]:
                 provider_lead = build_lead_payload(lead, emails)
             except ValueError:
                 counts["skipped"] += 1
+                held_for_review += 1
                 held_mapping_rows.append({"lead_id": str(lead["id"]), "status": "pending",
                                           "error_detail": "Held because the complete personalized email sequence is not ready for sync."})
                 continue
@@ -358,14 +362,20 @@ async def sync_completed_run(settings: Settings, run_id: str) -> dict[str, Any]:
             break
 
     unresolved = counts["unknown"] + counts["failed"]
+    waiting_for_review = held_for_review > 0 and counts["synced"] == 0 and not unresolved
     await update_campaign_mapping(settings, mapping["id"], {
-        "status": "active" if provider_campaign_was_active else "failed" if unresolved else "leads_synced",
-        "error_detail": "Some provider lead outcomes need reconciliation; they will be checked before retry."
-        if unresolved else None,
+        "status": "active" if provider_campaign_was_active else "failed" if unresolved
+        else "awaiting_review" if waiting_for_review else "leads_synced",
+        "error_detail": ("Some provider lead outcomes need reconciliation; they will be checked before retry."
+                         if unresolved else "Waiting for personalized email review before lead sync."
+                         if waiting_for_review else None),
     })
     result: dict[str, Any] = {"run_id": run_id, "instantly_campaign_id": provider_campaign_id, **counts}
     if unresolved:
         result["launch"] = "held_for_reconciliation"
+        return result
+    if waiting_for_review:
+        result["launch"] = "awaiting_review"
         return result
     if provider_campaign_was_active:
         result["launch"] = "already_active"

@@ -106,11 +106,18 @@ async def get_campaign_run_instantly_status(settings: Settings, run_id: str) -> 
             _count_run_lead_mappings(client, base, settings, mapping_id, status)
             for status in ("synced", "pending", "failed", "skipped", "unknown")
         ])
-    return {"run_id": run_id, "status": mapping.get("status", "pending"),
+    mapping_status = mapping.get("status", "pending")
+    error_detail = mapping.get("error_detail")
+    if mapping_status == "failed" and error_detail == "No eligible leads synced to Instantly." and counts[1] > 0:
+        # Older runs marked this normal human-review hold as failed. Present the
+        # actual state while recovery reuses that same provider campaign.
+        mapping_status = "awaiting_review"
+        error_detail = "Waiting for personalized email review before lead sync."
+    return {"run_id": run_id, "status": mapping_status,
             "instantly_campaign_id": mapping.get("instantly_campaign_id"),
             "synced_leads": counts[0], "pending_leads": counts[1], "failed_leads": counts[2],
             "skipped_leads": counts[3], "unknown_leads": counts[4],
-            "error_detail": mapping.get("error_detail"),
+            "error_detail": error_detail,
             "sender_account_emails": mapping.get("sender_account_emails") or [],
             "updated_at": mapping.get("updated_at")}
 

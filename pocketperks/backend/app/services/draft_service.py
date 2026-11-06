@@ -2,7 +2,8 @@
 import json
 
 from app.config import Settings
-from app.drafts_db import load_campaign, upsert_step_draft, get_draft_context, set_generation_state, demote_campaign
+from app.drafts_db import (demote_campaign, get_draft_context, load_campaign,
+                           prepare_step_draft, set_generation_state, upsert_step_draft)
 from app.integrations.openrouter_client import (
     BadResponseError, MissingAPIKeyError, MissingModelError, OpenRouterError,
     OpenRouterTimeoutError, RateLimitedError, chat_completion_json,
@@ -63,6 +64,95 @@ async def generate_campaign_drafts(settings: Settings, campaign_id: str) -> dict
             failed.append({"step_number": step["step_number"], "step_id": step["id"],
                            "error": category, "detail": detail})
     return {"campaign_id": campaign_id, "generated": created, "failed": failed}
+
+
+def _previous_steps(campaign: dict, step_number: int) -> list[dict]:
+    previous = []
+    for earlier in sorted(campaign.get("campaign_steps", []), key=lambda item: item["step_number"]):
+        if earlier["step_number"] >= step_number:
+            break
+        relation = earlier.get("generic_drafts")
+        if isinstance(relation, list):
+            relation = relation[0] if relation else None
+        if isinstance(relation, dict) and relation.get("subject") and relation.get("body"):
+            previous.append({"subject": relation["subject"], "body": relation["body"]})
+    return previous
+
+
+async def _generate_one_step(settings: Settings, campaign: dict, step: dict) -> dict:
+    payload = await chat_completion_json(_prompt(
+        campaign, step, _previous_steps(campaign, int(step["step_number"]))), settings)
+    if not isinstance(payload, dict) or not isinstance(payload.get("subject"), str) or not isinstance(payload.get("body"), str):
+        raise ValueError("Model response must contain subject and body strings.")
+    subject, body = payload["subject"].strip(), payload["body"].strip()
+    if not subject or not body:
+        raise ValueError("Model response subject and body must not be empty.")
+    return await upsert_step_draft(settings, step["id"], subject, body)
+
+
+async def queue_campaign_draft_generation(settings: Settings, campaign_id: str) -> dict:
+    """Persist visible generating states before handing draft work to a background task."""
+    campaign = await load_campaign(settings, campaign_id)
+    if campaign is None:
+        return {"error": "not_found"}
+    steps = sorted(campaign.get("campaign_steps", []), key=lambda item: item["step_number"])
+    for step in steps:
+        await prepare_step_draft(settings, step["id"])
+    return {"campaign_id": campaign_id, "generation_status": "generating", "total_steps": len(steps)}
+
+
+async def run_campaign_draft_generation_job(settings: Settings, campaign_id: str) -> None:
+    try:
+        campaign = await load_campaign(settings, campaign_id)
+        if campaign is None:
+            return
+        for step in sorted(campaign.get("campaign_steps", []), key=lambda item: item["step_number"]):
+            relation = step.get("generic_drafts")
+            if isinstance(relation, list):
+                relation = relation[0] if relation else None
+            draft_id = relation.get("id") if isinstance(relation, dict) else None
+            try:
+                await _generate_one_step(settings, campaign, step)
+            except Exception as exc:
+                if draft_id:
+                    _category, safe_detail = _safe_failure(exc)
+                    try:
+                        await set_generation_state(settings, draft_id, "failed", safe_detail)
+                    except Exception:
+                        pass
+            # Refresh so later messages can use the newly generated preceding step.
+            campaign = await load_campaign(settings, campaign_id) or campaign
+    except Exception:
+        # If campaign reload itself fails, close all still-generating step states.
+        try:
+            campaign = await load_campaign(settings, campaign_id)
+            for step in (campaign or {}).get("campaign_steps", []):
+                relation = step.get("generic_drafts")
+                if isinstance(relation, list):
+                    relation = relation[0] if relation else None
+                if isinstance(relation, dict) and relation.get("generation_status") == "generating":
+                    await set_generation_state(settings, relation["id"], "failed",
+                                               "Draft generation could not finish. Check backend/database connectivity, then retry.")
+        except Exception:
+            # Leave provider/database internals out of the user-visible state.
+            pass
+
+
+async def run_step_generation_job(settings: Settings, campaign_id: str,
+                                  step_id: str, draft_id: str) -> None:
+    try:
+        campaign = await load_campaign(settings, campaign_id)
+        step = next((item for item in (campaign or {}).get("campaign_steps", [])
+                     if item.get("id") == step_id), None)
+        if not campaign or not step:
+            raise ValueError("Campaign email step was not found.")
+        await _generate_one_step(settings, campaign, step)
+    except Exception as exc:
+        _category, safe_detail = _safe_failure(exc)
+        try:
+            await set_generation_state(settings, draft_id, "failed", safe_detail)
+        except Exception:
+            pass
 
 
 async def regenerate_draft(settings: Settings, draft_id: str) -> dict | None:

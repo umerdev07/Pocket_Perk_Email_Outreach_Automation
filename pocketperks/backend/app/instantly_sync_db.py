@@ -263,24 +263,29 @@ async def load_active_campaign_windows(settings: Settings, *, limit: int = 100) 
 
 
 async def load_active_runs_with_pending_leads(settings: Settings, *, limit: int = 100) -> list[str]:
-    """Find active runs that still have a locally pending lead mapping.
+    """Find campaigns whose leads became eligible after human review.
 
-    This is a recovery path for a reviewed email whose queue notification was
-    delayed, archived, or missed while the worker/backend was restarting.
+    Includes active campaigns with delayed approval notifications, campaigns
+    explicitly waiting for review, and older no-eligible-leads failures.
     """
     base = _base(settings)
     async with httpx.AsyncClient(timeout=25) as client:
-        active = await _checked(await client.get(f"{base}/instantly_campaign_mappings", params={
-            "select": "id,run_id", "status": "eq.active", "instantly_campaign_id": "not.is.null",
-            "order": "updated_at.asc", "limit": str(limit),
-        }, headers=_headers(settings)), "Could not load active Instantly campaigns for recovery.")
-        active_ids = [str(row["id"]) for row in active if row.get("id")]
-        if not active_ids:
+        waiting = await _checked(await client.get(f"{base}/instantly_campaign_mappings", params={
+            "select": "id,run_id", "status": "in.(active,awaiting_review)",
+            "instantly_campaign_id": "not.is.null", "order": "updated_at.asc", "limit": str(limit),
+        }, headers=_headers(settings)), "Could not load pending-review Instantly campaigns.")
+        legacy_no_eligible = await _checked(await client.get(f"{base}/instantly_campaign_mappings", params={
+            "select": "id,run_id", "status": "eq.failed", "error_detail": "eq.No eligible leads synced to Instantly.",
+            "instantly_campaign_id": "not.is.null", "order": "updated_at.asc", "limit": str(limit),
+        }, headers=_headers(settings)), "Could not load legacy Instantly campaigns awaiting review.")
+        mappings = waiting + legacy_no_eligible
+        mapping_ids = [str(row["id"]) for row in mappings if row.get("id")]
+        if not mapping_ids:
             return []
         pending = await _checked(await client.get(f"{base}/instantly_lead_mappings", params={
-            "select": "campaign_mapping_id", "campaign_mapping_id": f"in.({','.join(active_ids)})",
+            "select": "campaign_mapping_id", "campaign_mapping_id": f"in.({','.join(mapping_ids)})",
             "status": "eq.pending", "limit": "5000",
         }, headers=_headers(settings)), "Could not load active Instantly campaigns for recovery.")
     pending_ids = {str(row["campaign_mapping_id"]) for row in pending if row.get("campaign_mapping_id")}
-    return list(dict.fromkeys(str(row["run_id"]) for row in active
+    return list(dict.fromkeys(str(row["run_id"]) for row in mappings
                                if row.get("run_id") and str(row.get("id")) in pending_ids))
