@@ -53,22 +53,31 @@ async def start_campaign_run(settings: Settings, campaign_id: str, batch_id: str
             raise HTTPException(status_code=404, detail="Lead batch not found.")
         total_leads = int(batches[0]["imported_count"])
 
+        schedule_end_at = None
+        schedule_adjustment = None
         if sender_accounts:
             estimate = _campaign_window_estimate(campaigns[0], total_leads, sender_accounts)
-            if estimate and estimate["too_short"]:
+            if estimate and estimate.get("too_long"):
                 raise HTTPException(
                     status_code=422,
-                    detail=(f"This campaign window is too short for the selected batch and inboxes. "
-                            f"Allow about {estimate['required_days']} calendar day(s) for the estimated "
-                            f"sending capacity and saved follow-up delays; extend the campaign end date/time "
-                            f"before starting. This is an estimate, not a delivery guarantee."),
+                    detail=("This batch would need more than two years at the selected inbox limits. "
+                            "Split the batch or select additional active inboxes before starting."),
                 )
+            if estimate and estimate["recommended_end_at"]:
+                schedule_end_at = estimate["recommended_end_at"]
+                schedule_adjustment = {
+                    "previous_end_at": campaigns[0]["end_at"],
+                    "new_end_at": schedule_end_at,
+                    "timezone": str(campaigns[0].get("timezone") or "UTC"),
+                    "buffer_sending_windows": 1,
+                }
 
         run_response = await client.post(f"{base}/campaign_runs", headers=_headers(settings, "return=representation"), json={
             "campaign_id": campaign_id,
             "batch_id": batch_id,
             "status": "running",
             "total_leads": total_leads,
+            **({"schedule_end_at": schedule_end_at} if schedule_end_at else {}),
             **({"sender_account_emails": sender_emails} if sender_emails is not None else {}),
         })
         if getattr(run_response, "status_code", None) == 409:
@@ -77,7 +86,8 @@ async def start_campaign_run(settings: Settings, campaign_id: str, batch_id: str
         if not run_response.is_success or not run_response.json():
             raise HTTPException(status_code=503, detail="Could not create the campaign run.")
     row = run_response.json()[0]
-    return {"run_id": row["id"], "status": row["status"], "total_leads": row["total_leads"]}
+    return {"run_id": row["id"], "status": row["status"], "total_leads": row["total_leads"],
+            **({"schedule_adjustment": schedule_adjustment} if schedule_adjustment else {})}
 
 
 def _campaign_window_estimate(campaign: dict, total_leads: int,
@@ -116,24 +126,44 @@ def _campaign_window_estimate(campaign: dict, total_leads: int,
 
     total_messages = total_leads * len(steps)
     sending_windows = max(1, math.ceil(total_messages / capacity_per_window))
-    required_days = sending_windows + followup_days
+    # Instantly may keep provider-side work queued beyond a theoretical capacity
+    # estimate. Reserve one additional weekday window so the configured stop date
+    # does not coincide with the last expected send window.
+    required_sending_windows = sending_windows + 1
+    required_days = required_sending_windows + followup_days
+    candidate_end = local_end
+    while True:
+        calendar_days = (candidate_end.date() - local_start.date()).days + 1
+        sending_days = sum(
+            (local_start.date() + timedelta(days=offset)).weekday() < 5
+            for offset in range(max(0, calendar_days))
+        )
+        if calendar_days >= required_days and sending_days >= required_sending_windows:
+            break
+        candidate_end += timedelta(days=1)
+        if (candidate_end.date() - local_start.date()).days > 730:
+            return {"required_days": required_days, "available_days": 730,
+                    "sending_windows": sending_windows, "recommended_end_at": None,
+                    "too_short": True, "too_long": True}
+    recommended_end_at = candidate_end.isoformat() if candidate_end > local_end else None
     available_calendar_days = (local_end.date() - local_start.date()).days + 1
     available_sending_days = sum(
         (local_start.date() + timedelta(days=offset)).weekday() < 5
-        for offset in range(available_calendar_days)
+        for offset in range(max(0, available_calendar_days))
     )
     return {
         "required_days": required_days,
         "available_days": available_calendar_days,
-        "too_short": (sending_windows > available_sending_days
-                      or required_days > available_calendar_days),
+        "sending_windows": sending_windows,
+        "recommended_end_at": recommended_end_at,
+        "too_short": bool(recommended_end_at),
     }
 
 
 async def get_campaign_run(settings: Settings, run_id: str) -> dict | None:
     async with httpx.AsyncClient(timeout=15) as client:
         response = await client.get(f"{_base(settings)}/campaign_runs", params={
-            "select": "id,campaign_id,batch_id,status,total_leads,processed,skipped,failed,error_detail,failure_log,created_at,finished_at",
+            "select": "id,campaign_id,batch_id,status,total_leads,processed,skipped,failed,error_detail,failure_log,created_at,finished_at,schedule_end_at",
             "id": f"eq.{run_id}", "limit": "1",
         }, headers=_headers(settings))
     if not response.is_success:
@@ -146,7 +176,7 @@ async def get_campaign_run(settings: Settings, run_id: str) -> dict | None:
             "status": row["status"], "total_leads": row["total_leads"], "processed": row["processed"],
             "skipped": row["skipped"], "failed": row["failed"], "created_at": row["created_at"],
             "finished_at": row["finished_at"], "error_detail": row.get("error_detail"),
-            "failure_log": row.get("failure_log") or []}
+            "failure_log": row.get("failure_log") or [], "schedule_end_at": row.get("schedule_end_at")}
 
 
 async def get_campaign_run_instantly_status(settings: Settings, run_id: str) -> dict:

@@ -314,4 +314,11 @@ This log records completed work and verification reported in this project chat. 
 - No migration is required. Existing Instantly campaigns are not modified retroactively; this behavior applies when a run creates or syncs its campaign under the updated backend.
 - Supabase read-only verification query for a run: join `instantly_campaign_mappings` and `instantly_lead_mappings`, grouped by mapping and lead status; keep run ID in the operator's verification notes.
 
-- Campaign preflight now estimates all email-step sends against selected Instantly inbox daily limits, sending gaps, weekday windows and saved follow-up delays. The frontend and API reject starting a new run if the chosen campaign window is too short, preventing a configured stop date from closing a run with queued emails. This estimate is advisory about provider throughput, not inbox placement.
+- Earlier Stage 7.4 preflight blocked runs when the selected schedule looked too short. Stage 7.5 supersedes that behavior with an isolated automatic run deadline extension. The capacity calculation remains an estimate, not an inbox-placement or delivery guarantee.
+
+## Stage 7.5 — automatic per-run schedule extension (2026-11-07)
+- Replaced the short-window hard block with an automatic end-date extension when the selected batch, sender limits/gaps, weekday schedule, saved follow-up delays, and a one-weekday provider-queue buffer exceed the chosen window.
+- Kept the approved campaign unchanged: the adjusted deadline is stored on that specific campaign run, so other runs and active campaigns using the same approved campaign retain their own schedule.
+- Instantly sync, scheduled activation, and automatic pause now use the per-run end time. The start dialog explains the estimated extension; the run result displays the exact previous and adjusted deadlines in the campaign timezone.
+- Sender selection, daily sending hours, sequence copy, and saved step delays are unchanged. This extends the allowed end date; it does not guarantee delivery or override Instantly's own account limits.
+- Added migration `030_campaign_run_schedule_end.sql`. Apply it in Supabase before building/restarting the backend. No automated tests or frontend build were run in this change; run local checks and a small controlled test before deployment.
