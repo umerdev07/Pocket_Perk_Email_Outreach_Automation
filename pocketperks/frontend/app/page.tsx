@@ -26,7 +26,7 @@ function estimateCampaignPacing(batch:Batch|undefined,campaign:Campaign|undefine
  const steps=campaign.steps||[];const totalMessages=batch.imported_count*Math.max(1,steps.length);const sendingWindows=capacity>0?Math.max(1,Math.ceil(totalMessages/capacity)):null;
  const followupDelayDays=steps.slice(1).reduce((sum,step)=>sum+Math.max(0,Number(step.delay_days)||0),0);const estimatedDays=sendingWindows===null?null:sendingWindows+followupDelayDays;
  const start=new Date(`${startDate}T00:00:00Z`),end=new Date(`${endDate}T00:00:00Z`);const windowDays=Math.max(1,Math.round((end.getTime()-start.getTime())/86400000)+1);let availableSendingDays=0;for(let day=new Date(start);day<=end;day.setUTCDate(day.getUTCDate()+1)){const weekday=day.getUTCDay();if(weekday!==0&&weekday!==6)availableSendingDays++}
- return {windowMinutes,capacity,sendingWindows,followupDelayDays,estimatedDays,windowDays,tooShort:estimatedDays!==null&&(windowDays<estimatedDays||availableSendingDays<sendingWindows)}
+ return {windowMinutes,capacity,sendingWindows,followupDelayDays,estimatedDays,windowDays,tooShort:sendingWindows!==null&&(windowDays<(estimatedDays??sendingWindows)||availableSendingDays<sendingWindows)}
 }
 type Batch={id:string;file_name:string;imported_count:number;created_at:string;total_rows?:number;duplicate_count?:number;invalid_count?:number;rejected_count?:number;suppressed_count?:number};
 type BatchReport={batch:{id:string;file_name:string;total_rows:number;imported_count:number;duplicate_count:number;invalid_count:number;rejected_count:number;created_at:string;reject_log:Array<{row:number;status:string;data?:Record<string,string>}>};leads:Row[];shown:number};
