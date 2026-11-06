@@ -6,7 +6,7 @@ Oct 31, 2026 · @Umer
 
 PocketPerks ek simple email outreach automation tool hai: leads import karo, campaign banao, AI se drafts likhwao, har business ke liye personalize karo, risky emails ko human approval do, Instantly se bhejo aur replies ek jagah dekho. Yeh CRM nahi hai.
 
-**Core pipeline:** Import Leads → Campaign + generic drafts (OpenRouter) → Draft approval → Start Campaign (per-lead personalization) → Risk assessment → Human Approval (MEDIUM/HIGH) → Instantly send → Lead Replies.
+**Core pipeline:** Import Leads → Campaign + generic drafts (Claude API) → Draft approval → Start Campaign (per-lead personalization) → Risk assessment → Human Approval (MEDIUM/HIGH) → Instantly send → Lead Replies.
 
 **Scope (in):** CSV/Excel import, campaign creation, generic draft review, personalization, risk routing, Instantly sending, reply inbox, test mode.
 
@@ -40,7 +40,7 @@ PocketPerks ek simple email outreach automation tool hai: leads import karo, cam
 | --- | --- | --- |
 | CP-1 | Form: Campaign Name, Total Emails, Start Date, End Date, Instructions | Required fields; Total Emails 1 se 10; end date start date se pehle na ho |
 | CP-2 | Dynamic Email N Context fields | Total Emails badalne par context textareas utne hi dikhen |
-| CP-3 | Create Draft Campaign | Campaign save + OpenRouter se har step ka generic draft |
+| CP-3 | Create Draft Campaign | Campaign save + Claude API se har step ka generic draft |
 | CP-4 | Draft review | Subject/body edit, regenerate, approve per step |
 | CP-5 | Sirf approved drafts use hon | Saare steps approved na hon to campaign "approved" nahi hota |
 
@@ -91,7 +91,7 @@ PocketPerks ek simple email outreach automation tool hai: leads import karo, cam
 
 ## 3. TRD (Technical Requirements)
 
-Frontend sirf FastAPI se baat karta hai; FastAPI Supabase, OpenRouter aur Instantly se. Koi secret browser tak nahi pahunchta.
+Frontend sirf FastAPI se baat karta hai; FastAPI Supabase, Claude API aur Instantly se. Koi secret browser tak nahi pahunchta.
 
 ### 3.1 Stack
 
@@ -100,7 +100,7 @@ Frontend sirf FastAPI se baat karta hai; FastAPI Supabase, OpenRouter aur Instan
 | Frontend | Next.js + TypeScript (App Router), Tailwind | 4 pages, forms, tables |
 | Backend | FastAPI + Python 3.11+, Pydantic | Business logic, APIs, background jobs |
 | Database | Supabase PostgreSQL | Saara data; backend service key se access |
-| AI | OpenRouter API | Generic drafts, personalization, risk assessment |
+| AI | Claude Messages API | Generic drafts, personalization, risk assessment |
 | Email | Instantly API v2 | Sending, status, replies |
 | File parsing | pandas + openpyxl | CSV/.xlsx processing |
 
@@ -113,7 +113,7 @@ pocketperks/
       main.py, config.py, db.py
       routers/    leads.py campaigns.py drafts.py personalization.py approvals.py sending.py replies.py
       services/   import_service.py draft_service.py personalize_service.py risk_service.py send_service.py reply_service.py
-      integrations/ openrouter_client.py instantly_client.py
+      integrations/ claude_client.py instantly_client.py
       schemas/    (Pydantic models)
     tests/
     requirements.txt, .env.example
@@ -127,7 +127,7 @@ pocketperks/
 ### 3.3 Backend modules
 
 - **Import service:** file read, normalize, duplicate check, bulk insert. Poori file backend process karta hai; response mein sirf pehli 20 rows ka preview.
-- **OpenRouter client:** ek module, model name `.env` se (`OPENROUTER_MODEL`), JSON output mode, timeout aur retry (max 2).
+- **Claude client:** ek module, model name `.env` se (`CLAUDE_MODEL`), JSON output handling, timeout aur retry (max 2). API key sirf backend secret store mein.
 - **Personalization:** background task; lead-by-lead loop, har email ka status DB mein; ek lead fail ho to baqi chalte rahen.
 - **Risk service:** rule-based checks + AI check (neeche).
 - **Instantly client:** alag module, test mode ke saath.
@@ -184,9 +184,9 @@ No generic new-outbound `/send` API is documented. The supported design is creat
 
 ### 3.7 Environment variables (backend `.env` only)
 
-`SUPABASE_URL`, `SUPABASE_SERVICE_KEY`, `OPENROUTER_API_KEY`, `OPENROUTER_MODEL`, `INSTANTLY_API_KEY`, `SEND_MODE`, `FRONTEND_ORIGIN`. Frontend mein sirf `NEXT_PUBLIC_API_URL`.
+`SUPABASE_URL`, `SUPABASE_SERVICE_KEY`, `CLAUDE_API_KEY`, `CLAUDE_MODEL`, `INSTANTLY_API_KEY`, `SEND_MODE`, `FRONTEND_ORIGIN`. Frontend mein sirf `NEXT_PUBLIC_API_URL`.
 
-**OpenRouter model:** model `OPENROUTER_MODEL` se configure hota hai, is liye paid model par jane ke liye code rewrite ki zaroorat nahi. Free model ke rate limits/availability par production bharosa na karein. Client se funded OpenRouter account/API key aur approved model/budget lena hoga; key sirf backend secret store mein update hogi, chat ya frontend mein nahi. Rate-limit retries ke bawajood incomplete lead-by-lead work resumeable rehna chahiye.
+**Claude model:** `CLAUDE_MODEL` se model configure hota hai. Claude Messages API ko use karne ke liye client-provided, rotated API key aur approved model/budget chahiye; key sirf backend secret store mein hogi, chat, frontend ya repository mein nahi. Rate-limit retries ke bawajood incomplete lead-by-lead work resumeable rehna chahiye.
 
 ### 3.8 API endpoints (summary)
 
@@ -204,7 +204,7 @@ No generic new-outbound `/send` API is documented. The supported design is creat
 ### 3.9 Error handling aur testing
 
 - Har API consistent JSON error `{error, detail}` de; frontend ise toast/inline message mein dikhaye.
-- OpenRouter/Instantly timeouts par retry, phir clear failure state.
+- Claude API/Instantly timeouts par retry, phir clear failure state.
 - Tests: pytest (import, duplicate, risk rules, state transitions, test-mode sending), integrations ke liye alag tests jinme real calls opt-in hon; frontend ke liye basic component/page tests.
 
 ## 4. App Flow
@@ -407,12 +407,16 @@ Approval ke baad subject/body edit ho to hash badalne se status wapas `pending_r
 
 9 stages, har stage ke baad: kya bana, kaun se tests pass hue, kya baqi hai. Aglay stage par tabhi jao jab current stage ka exit check pass ho.
 
+**Stage 4.1 (complete, 2026-11-06):** OpenRouter ko Claude Messages API se replace kiya. Draft generation, per-lead personalization aur risk assessment ek hi backend Claude client use karte hain; `CLAUDE_API_KEY` aur `CLAUDE_MODEL` backend-only settings hain. Ek minimal live call se configured Sonnet model ka response confirm hua; unit suite nahi chalayi gayi. Approval, Instantly sync/launch, replies ya scheduling behavior is provider change mein nahi badla.
+
+**Stage 4.2 (current):** Harrogate kit ke approved product facts aur sandwich-shop, café aur barber messaging ko shared backend prompt guidance mein apply karo. Existing campaign instructions, step context, verified lead category, human review, opt-out, Instantly sync/launch aur schedule authoritative rahenge. Is slice ke liye frontend ya database change tabhi ho agar current campaign fields insufficient hon. Exit check: teeno sectors ki sample copy source facts se bahar claim na kare, placeholders/fake reply subjects na hon, aur existing review/send workflow unchanged ho.
+
 | Stage | Kaam | Deliverable | Exit check |
 | --- | --- | --- | --- |
 | 1. Foundation | Naya folder, FastAPI + Next.js setup, Supabase connection, initial migration (8 tables), `/api/health`, CORS, `.env.example` | Dono apps local chalte hain, frontend health call dikhata hai | `pytest` health test pass; frontend se backend + DB connection confirm |
 | 2. Import Leads | Upload endpoint, CSV/.xlsx parse, normalize, email/domain duplicate check, summary, preview (20 rows), Import Leads page | Poori file DB mein, preview 20 rows | Tests: duplicates, invalid email, 100+ rows file mein preview sirf 20, empty/galat file error |
 | 3. Campaign Management | Campaign name, instructions, total emails, per-step contexts, campaign start/end dates; campaign + steps save/list; delete a step while campaign remains draft | Campaign banta, date range save hoti aur list mein dikhti hai | Date order and required-field validation; deletion preserves at least one step and re-approval |
-| 4. OpenRouter Drafts | OpenRouter client, generic draft generation, draft edit/regenerate/approve, campaign status `approved` | Har step ka approved draft DB mein | Real OpenRouter call (key ke saath) se draft; edit ke baad re-approve; unapproved campaign start nahi hota |
+| 4. AI Drafts | Claude client, generic draft generation, draft edit/regenerate/approve, campaign status `approved` | Har step ka approved draft DB mein | Claude call (rotated key ke saath) se draft; edit ke baad re-approve; unapproved campaign start nahi hota |
 | 5. Personalization | Start Campaign endpoint, durable PGMQ run queue, restart-resumable worker, bounded page/chunk processing, per-lead per-step personalization, run progress and per-step failure details | `personalized_emails` rows har lead x step ke liye; saved lead/step pairs retry par reuse; missing steps ki safe reason run report mein | Apply queue migration; test batch par sahi lead/campaign/step link; restart/retry par duplicate email rows ya unnecessary repeat AI calls nahi; ek lead fail hone par run nahi rukta; failures explainable; koi invented fact nahi (sample review) |
 | 6. Risk + Human Approval | Lightweight content-level spam-risk checks, LOW/MEDIUM/HIGH routing, approval/review history, edit/approve/reject, risk recheck | Only obvious content/format spam signals need human review; LOW goes to queued (not sent) | Risk checks do not claim Gmail inbox placement; history records automated checks and human decisions |
 | 7. Instantly + durable scheduling | Official API verified; durable lead sync, approval/suppression gates, automatic activation in explicitly enabled live mode, campaign-local timezone/date/time schedule, follow-up delays, provider status and reply tracking | Eligible leads sync; Instantly campaign activates at the PocketPerks start timestamp and pauses at its end timestamp | No duplicate/ambiguous writes; test mode cannot activate; controlled live pilot and exact end-time pause verified |
@@ -426,7 +430,7 @@ Format: **Bana kya** · **Tests (pass/fail)** · **Baqi kya** · **Koi decision 
 ### 7.2 Build order ke usool
 
 - Pehle DB migration, phir backend endpoint + test, phir frontend page.
-- Har integration (OpenRouter, Instantly) alag module mein, bina UI ke test ho sake.
+- Har integration (Claude API, Instantly) alag module mein, bina UI ke test ho sake.
 - Real calls ke tests opt-in (env flag), default tests offline aur deterministic.
 - Stage 7 tak `SEND_MODE=test`; live sending sirf user ki explicit ijazat se.
 
@@ -443,14 +447,14 @@ Koi fake business data repo mein nahi. Testing ke liye user apni asli (ya sample
 | Spam / deliverability | Domain reputation kharab | Warm-up Instantly se, chhote batches, test mode pehle, risk check ko guarantee na samjho |
 | Webhook local mein na pahunche | Replies nazar na aayen | Tunnel + manual Refresh fallback |
 | Badi file par timeout | Import fail | Backend chunked processing, background task |
-| OpenRouter rate limit/cost | Run adhoora | Retry, lead-by-lead status, resume option |
+| Claude API rate limit/cost | Run adhoora | Retry, lead-by-lead status, resume option |
 
 ### Tay ho chuki baatein aur baqi sawal
 
 - Tay: campaign mein max 10 email steps.
 - Tay: lead file ke 11 columns (upar schema mein map kiye).
 - Tay: client ka Instantly account maujood hai, kuch sending emails connected hain.
-- Tay (superseded): OpenRouter par free model. Production model/budget approval client se lena baqi hai.
+- Tay (superseded): OpenRouter par free model. Claude API ab approved provider direction hai; rotated key, configured model aur client budget secure backend config mein required hain.
 - Tay: target UK cafés aur restaurants; email mein PocketPerks Loyalty Stamp ka pitch.
 - Tay: Apify ke through lead discovery abhi manually hoti hai; user CSV/XLSX import karega. Apify API integration abhi nahi karni.
 - Tay: har marketing email mein sender identity aur opt-out tareeqa hoga; opt-outs future sends se suppress honge. Individual subscriber eligibility ko send se pehle handle karna hoga.
@@ -507,11 +511,11 @@ Koi fake business data repo mein nahi. Testing ke liye user apni asli (ya sample
 - Added a hard unresolved-placeholder gate: Human Approval refuses `[Your Name]`/`{{name}}`-style tokens until edited; personalization instructs the model to use `The PocketPerks Team` when no real sender name is provided; Instantly payload creation rejects any leftover placeholder. This protects future sends and cannot recall messages already delivered.
 - The 9-recipient live pilot is complete as a controlled workflow check (user-reported 7 Inbox, 2 Spam). A 200-lead rehearsal does not require 200 inboxes: use synthetic leads and mocked providers in an isolated local run to evaluate import, batching, personalization progress/retries, suppression, mappings and duplicate prevention. Do not send synthetic data through the live-connected Instantly workspace. Actual deliverability checks should use only inboxes the user controls or has permission to test.
 - Before scaling, complete and record the isolated 200-lead mock rehearsal (duration, chunk outcomes, retries/resume, no duplicate provider writes). A small separately approved live pilot can validate delivery; a 200-row import/sync cannot prove inbox placement.
-- Production OpenRouter availability is a client dependency: get approval for a funded account/key, model and spending limit. The application already selects the key/model via backend environment variables. Add fallback only after the client approves specific backup models and spend controls; do not silently switch models.
+- Production Claude availability is a client dependency: use a rotated funded API key, approved model and spending limit. The application selects the key/model through backend environment variables; do not silently switch models or fall back to OpenRouter.
 - Feature readiness estimate: approximately 80% of the planned product behavior is implemented; this is a project estimate, not a test-coverage score. The small live pilot proves the basic send path, not production-scale reliability or inbox placement.
 - Lead eligibility now runs before AI personalization and again before Instantly sync. Default `LEAD_ELIGIBILITY_MODE=advisory` allows legacy or unverified rows but holds explicitly invalid/risky flags; optional `strict` mode also holds anything not explicitly marked valid. Accepted verifier labels still need client agreement before switching to strict.
 - Instantly webhooks now have a shared-secret-authenticated intake endpoint, digest-based duplicate suppression, durable Supabase queue, retrying worker, reply/unsubscribe event handling, and successful-event payload cleanup. Existing one-minute polling stays enabled as a fallback. Migration 029 is required; webhook registration itself must wait until the client-provided server has stable HTTPS and a configured `INSTANTLY_WEBHOOK_SECRET`.
 - Remaining readiness work: the isolated 200-lead mock rehearsal (explicitly deferred until the paid AI model is available), final backend/frontend validation and controlled reply-send verification with the `emails:create` scope, and then deployment/monitoring/secrets on the client-provided production server. Do not send synthetic leads through the live-connected Instantly workspace.
 - Client decisions needed for safe feature completion: provide sender postal/footer details and confirm the verifier's accepted valid-result labels and blocking quality flags before enabling strict eligibility. Reviewer account invitation/permission check remains deferred unless the client needs that role.
-- External operating dependency: use a client-funded OpenRouter key/model with an agreed budget; configure the chosen secret in the backend environment. The API integration already supports model selection through configuration.
+- External operating dependency: use a client-funded Claude API key/model with an agreed budget; configure both as backend secrets/environment variables. The Claude integration supports model selection through configuration.
 - Deployment is a separate later step, as the client will provide the production server. Before go-live, also verify end-time pause with the worker online, configure monitoring/backups/secrets on that server, and keep the backend reachable without a temporary tunnel. Stage 9 feature sign-off remains open.

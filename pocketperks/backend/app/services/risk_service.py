@@ -7,7 +7,7 @@ import json
 import re
 
 from app.config import Settings
-from app.integrations.openrouter_client import chat_completion_json
+from app.integrations.claude_client import chat_completion_json
 
 LEVELS = {"LOW": 0, "MEDIUM": 1, "HIGH": 2}
 PLACEHOLDER_RE = re.compile(r"\{\{\s*[^}]+\}\}|\[[^\]]+\]")

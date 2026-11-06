@@ -6,7 +6,7 @@ from app.services.personalization_service import process_campaign_run
 
 
 def settings():
-    return Settings(_env_file=None, openrouter_api_key="test-key", openrouter_model="test/model:free")
+    return Settings(_env_file=None, claude_api_key="test-key", claude_model="claude-sonnet-5-5")
 
 
 def context(leads, step_count=2):
@@ -87,7 +87,7 @@ def test_one_lead_failure_does_not_stop_following_lead():
 
 def test_large_run_uses_bounded_concurrency_and_chunked_progress():
     leads = [{"id": f"lead-{n}", "business_name": f"Cafe {n}"} for n in range(7)]
-    config = Settings(_env_file=None, openrouter_api_key="test-key", openrouter_model="test/model:free",
+    config = Settings(_env_file=None, claude_api_key="test-key", claude_model="claude-sonnet-5-5",
                       personalization_concurrency=2, personalization_batch_size=2)
     active = maximum_active = 0
     progress = []
@@ -126,7 +126,7 @@ def test_large_run_loads_leads_as_database_pages():
     del data["leads"]
     data["run"]["batch_id"] = "batch-1"
     page = [{"id": f"lead-{n}", "business_name": f"Cafe {n}"} for n in range(3)]
-    config = Settings(_env_file=None, openrouter_api_key="test-key", openrouter_model="test/model:free",
+    config = Settings(_env_file=None, claude_api_key="test-key", claude_model="claude-sonnet-5-5",
                       personalization_concurrency=2, personalization_batch_size=2)
     with patch("app.services.personalization_service.load_run_context", new=AsyncMock(return_value=data)), \
          patch("app.services.personalization_service.load_lead_page", new=AsyncMock(return_value=page)) as load_page, \

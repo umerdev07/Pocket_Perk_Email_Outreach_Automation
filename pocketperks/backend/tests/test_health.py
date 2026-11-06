@@ -24,9 +24,11 @@ def test_health_unavailable_does_not_claim_success():
 
 
 def test_cors_for_frontend():
-    response = TestClient(create_app(auth_enabled=False)).options("/api/health", headers={
-        "Origin": "http://localhost:3000", "Access-Control-Request-Method": "GET",
-    })
+    test_settings = Settings(_env_file=None, frontend_origin="http://localhost:3000")
+    with patch("app.main.get_settings", return_value=test_settings):
+        response = TestClient(create_app(auth_enabled=False)).options("/api/health", headers={
+            "Origin": "http://localhost:3000", "Access-Control-Request-Method": "GET",
+        })
     assert response.headers["access-control-allow-origin"] == "http://localhost:3000"
 
 

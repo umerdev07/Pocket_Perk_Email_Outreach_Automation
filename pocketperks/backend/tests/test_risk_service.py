@@ -8,7 +8,7 @@ from app.services.risk_service import _rule_assessment, assess_personalized_emai
 
 
 def settings():
-    return Settings(_env_file=None, openrouter_api_key="test-key", openrouter_model="test/model:free")
+    return Settings(_env_file=None, claude_api_key="test-key", claude_model="claude-sonnet-5-5")
 
 
 def facts():

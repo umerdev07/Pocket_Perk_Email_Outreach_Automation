@@ -293,3 +293,16 @@ This log records completed work and verification reported in this project chat. 
 - The reply composer now shows per-message sending, success, and actionable error feedback instead of relying only on a page-level notice.
 - Reply sends require Instantly `emails:create`; `webhooks:create` is a separate permission and does not authorize sending.
 - Added a send-time reconciliation fallback: if a legacy reply row has a provider email ID but its mailbox is missing or malformed, PocketPerks fetches that exact email via Instantly `emails:read`, resolves the receiving mailbox, saves it, and then sends the thread-bound reply. This handles older rows outside the normal polling cursor. If the provider item has no recoverable mailbox, the UI gets a specific actionable error.
+
+## Stage 4.1 — Claude API provider migration (2026-11-06)
+- Replaced the OpenRouter client with a shared Claude Messages API client for generic draft generation, personalization, and AI risk assessment. The existing JSON parsing/repair behavior, bounded retries, safe provider errors, background queue handling, human review routing, and Instantly sending pipeline are retained.
+- Added backend-only `CLAUDE_API_KEY` and `CLAUDE_MODEL` configuration; updated `.env.example` while preserving the user's existing local Claude variable change. No key value was written to files, logs, Git, or container settings.
+- Migrated provider-specific test fixtures to Claude's response/auth format; test suites were not run. No database migration or frontend change is required for this provider slice.
+- The configured `claude-sonnet-5-5` model and backend key produced a successful minimal live response. Automated unit tests remain unrun. The Harrogate sector-specific prompt changes are tracked separately in Stage 4.2.
+
+## Stage 4.2 — Harrogate kit prompt alignment (2026-11-06)
+- Read the 17-page Harrogate Outreach Kit and added a shared backend reference for the approved core-card price boundary, optional paid messaging, reward/QR setup, and category-specific guidance for sandwich shops, cafés, and barbers.
+- Generic draft and per-lead personalization prompts now use that source-backed context while keeping campaign instructions and email-step context authoritative. Sector guidance is selected only from the imported category; unknown sectors use a general fallback.
+- Added safeguards against unsupported outcomes/prices/rewards, implying conversations that did not happen, placeholder leakage, and fake reply/forward subjects. The existing application-owned `reply STOP` opt-out line remains appended after generation.
+- No frontend, schema, migration, approval-state, suppression, Instantly sync/launch, or schedule behavior changed. Existing campaign form fields and imported category are sufficient to use the guidance.
+- Python syntax compilation and `git diff --check` passed. Automated tests, frontend build, deployment, and Git push have not been run/performed for this stage.

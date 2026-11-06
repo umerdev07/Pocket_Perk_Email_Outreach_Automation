@@ -15,6 +15,7 @@ def test_campaign_payload_uses_uk_dates_and_keeps_provider_campaign_inactive():
         "name": "PocketPerks dummy recipient test",
         "start_at": "2026-11-05T00:30:00+00:00",
         "end_at": "2026-11-05T23:00:00+00:00",
+        "timezone": "Europe/London",
     }
 
     payload = build_campaign_payload(campaign, [approved_step(1), approved_step(2)])
@@ -34,6 +35,7 @@ def test_campaign_payload_converts_utc_to_bst_date_boundary():
         "name": "UK summer-time test",
         "start_at": "2026-07-10T23:30:00+00:00",
         "end_at": "2026-07-11T22:30:00+00:00",
+        "timezone": "Europe/London",
     }
 
     payload = build_campaign_payload(campaign, [approved_step(1)])
@@ -60,5 +62,5 @@ def test_lead_payload_maps_reviewed_personalized_email_variables():
     assert result["email"] == "owner@example.co.uk"
     assert result["custom_variables"] == {
         "pp_email_1_subject": "Hello Example Cafe",
-        "pp_email_1_body": "A short intro.",
+        "pp_email_1_body": "A short intro.\n\nTo stop future PocketPerks emails, reply STOP.",
     }

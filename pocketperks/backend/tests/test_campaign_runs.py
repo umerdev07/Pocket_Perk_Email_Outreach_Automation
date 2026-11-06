@@ -76,12 +76,15 @@ def test_valid_start_returns_created_run_summary():
     with patch("app.campaign_runs_db.httpx.AsyncClient", FakeSupabase):
         created = asyncio.run(start_campaign_run(db_settings(), str(campaign_id), str(batch_id)))
     assert created == expected
-    with patch("app.routers.campaign_runs.start_campaign_run", new=AsyncMock(return_value=expected)) as start, \
+    with patch("app.routers.campaign_runs.list_sending_accounts", new=AsyncMock(return_value=[{"email": "sender@example.com", "status": "active"}])), \
+         patch("app.routers.campaign_runs.is_sending_account_ready", return_value=True), \
+         patch("app.routers.campaign_runs.start_campaign_run", new=AsyncMock(return_value=expected)) as start, \
          patch("app.routers.campaign_runs.process_campaign_run", new=AsyncMock()) as process:
-        response = client.post(f"/api/campaigns/{campaign_id}/start", json={"batch_id": str(batch_id)})
+        response = client.post(f"/api/campaigns/{campaign_id}/start", json={
+            "batch_id": str(batch_id), "sender_emails": ["sender@example.com"]})
     assert response.status_code == 200
     assert response.json() == expected
-    assert start.await_args.args[1:] == (str(campaign_id), str(batch_id))
+    assert start.await_args.args[1:] == (str(campaign_id), str(batch_id), ["sender@example.com"])
     process.assert_awaited_once()
     assert FakeSupabase.calls[-1][0] == "POST"
     assert FakeSupabase.calls[-1][2]["json"]["total_leads"] == 120
@@ -108,7 +111,7 @@ def test_run_progress_endpoint_returns_counters():
 def test_get_campaign_run_returns_saved_failure_log():
     run_id = str(uuid4())
     failure_log = [{"business_name": "Cafe Example", "step_number": 2,
-                    "reason": "OpenRouter rate limit persisted after retries."}]
+                    "reason": "Claude API rate limit persisted after retries."}]
     fake([FakeResponse([{"id": run_id, "campaign_id": "c1", "batch_id": "b1", "status": "completed",
                          "total_leads": 1, "processed": 0, "skipped": 0, "failed": 1,
                          "error_detail": None, "failure_log": failure_log,

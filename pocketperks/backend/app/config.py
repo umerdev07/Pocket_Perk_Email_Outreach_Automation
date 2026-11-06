@@ -11,8 +11,8 @@ class Settings(BaseSettings):
     supabase_url: str = ""
     supabase_anon_key: str = ""
     supabase_service_key: str = ""
-    openrouter_api_key: str = ""
-    openrouter_model: str = ""
+    claude_api_key: str = ""
+    claude_model: str = ""
     instantly_api_key: str = ""
     instantly_webhook_secret: str = ""
     lead_eligibility_mode: Literal["advisory", "strict"] = "advisory"
@@ -21,7 +21,7 @@ class Settings(BaseSettings):
     instantly_auto_launch: bool = False
     send_mode: Literal["test", "live"] = "test"
     frontend_origin: str = "http://localhost:3000"
-    # Keep provider load bounded; tune these only within the OpenRouter model's limits.
+    # Keep provider load bounded; tune this to the configured Claude model's limits.
     personalization_concurrency: int = Field(default=1, ge=1, le=10)
     personalization_batch_size: int = Field(default=25, ge=1, le=250)
 

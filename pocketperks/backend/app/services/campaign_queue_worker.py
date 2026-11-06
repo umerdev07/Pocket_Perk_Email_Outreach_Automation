@@ -18,7 +18,7 @@ LEASE_REFRESH_SECONDS = 30
 MAX_DELIVERY_ATTEMPTS = 3
 EMPTY_QUEUE_SLEEP_SECONDS = 3
 RETRYABLE_RATE_LIMIT_DETAIL = (
-    "OpenRouter rate limit persisted after retries. Incomplete email steps will be retried."
+    "Claude API rate limit persisted after retries. Incomplete email steps will be retried."
 )
 
 

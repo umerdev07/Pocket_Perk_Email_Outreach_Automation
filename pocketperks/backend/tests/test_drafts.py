@@ -1,8 +1,12 @@
+import asyncio
+from datetime import UTC, datetime
 from unittest.mock import AsyncMock, patch
 
 from fastapi.testclient import TestClient
 
+from app.config import Settings
 from app.main import create_app
+from app.services.draft_service import generate_campaign_drafts
 
 
 CAMPAIGN = {"id": "camp-1", "name": "UK cafes", "instructions": "Introduce PocketPerks",
@@ -17,10 +21,10 @@ def test_generate_creates_a_draft_for_each_step():
          patch("app.services.draft_service.chat_completion_json", new=AsyncMock(side_effect=[
              {"subject": "One", "body": "Hi there, first"}, {"subject": "Two", "body": "Hi there, follow-up"}])) as ai, \
          patch("app.services.draft_service.upsert_step_draft", new=AsyncMock(side_effect=lambda _s, step, sub, body: {"step_id": step, "subject": sub, "body": body})) as save:
-        response = TestClient(create_app(auth_enabled=False)).post("/api/campaigns/camp-1/drafts/generate")
-    assert response.status_code == 200
-    assert len(response.json()["generated"]) == 2
-    assert response.json()["failed"] == []
+        result = asyncio.run(generate_campaign_drafts(Settings(_env_file=None, claude_api_key="test-key",
+                                                               claude_model="claude-sonnet-5-5"), "camp-1"))
+    assert len(result["generated"]) == 2
+    assert result["failed"] == []
     assert save.await_count == 2
     assert "One" in ai.await_args_list[1].args[0][1]["content"]
 
@@ -29,10 +33,22 @@ def test_generate_reports_failed_step_and_continues():
     with patch("app.services.draft_service.load_campaign", new=AsyncMock(return_value=CAMPAIGN)), \
          patch("app.services.draft_service.chat_completion_json", new=AsyncMock(side_effect=[RuntimeError("provider"), {"subject": "Two", "body": "Hi there, follow-up"}])), \
          patch("app.services.draft_service.upsert_step_draft", new=AsyncMock(return_value={"id": "draft-2"})) as save:
-        response = TestClient(create_app(auth_enabled=False)).post("/api/campaigns/camp-1/drafts/generate")
-    assert len(response.json()["failed"]) == 1
-    assert response.json()["failed"][0]["step_number"] == 1
+        result = asyncio.run(generate_campaign_drafts(Settings(_env_file=None, claude_api_key="test-key",
+                                                               claude_model="claude-sonnet-5-5"), "camp-1"))
+    assert len(result["failed"]) == 1
+    assert result["failed"][0]["step_number"] == 1
     save.assert_awaited_once()
+
+
+def test_generate_endpoint_queues_background_generation():
+    queued = {"campaign_id": "camp-1", "generation_status": "generating", "total_steps": 2}
+    with patch("app.routers.drafts.queue_campaign_draft_generation", new=AsyncMock(return_value=queued)) as queue, \
+         patch("app.routers.drafts.run_campaign_draft_generation_job", new=AsyncMock()) as job:
+        response = TestClient(create_app(auth_enabled=False)).post("/api/campaigns/camp-1/drafts/generate")
+    assert response.status_code == 202
+    assert response.json() == queued
+    queue.assert_awaited_once()
+    job.assert_awaited_once()
 
 
 def test_edit_updates_status_and_demotes_approved_campaign():
@@ -66,7 +82,8 @@ def test_regenerate_returns_accepted_and_schedules_background_job():
 
 
 def test_regenerate_does_not_queue_duplicate_while_generating():
-    with patch("app.routers.drafts.get_draft_context", new=AsyncMock(return_value={"generation_status": "generating"})), \
+    context = {"generation_status": "generating", "generation_started_at": datetime.now(UTC).isoformat()}
+    with patch("app.routers.drafts.get_draft_context", new=AsyncMock(return_value=context)), \
          patch("app.routers.drafts.set_generation_state", new=AsyncMock()) as set_state, \
          patch("app.routers.drafts.run_regeneration_job", new=AsyncMock()) as job:
         response = TestClient(create_app(auth_enabled=False)).post("/api/drafts/draft-1/regenerate")

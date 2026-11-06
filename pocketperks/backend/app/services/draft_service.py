@@ -4,42 +4,60 @@ import json
 from app.config import Settings
 from app.drafts_db import (demote_campaign, get_draft_context, load_campaign,
                            prepare_step_draft, set_generation_state, upsert_step_draft)
-from app.integrations.openrouter_client import (
-    BadResponseError, MissingAPIKeyError, MissingModelError, OpenRouterError,
-    OpenRouterTimeoutError, RateLimitedError, chat_completion_json,
+from app.integrations.claude_client import (
+    ClaudeAPIError, ClaudeAuthenticationError, ClaudeBadResponseError,
+    ClaudeRateLimitedError, ClaudeTimeoutError, MissingClaudeAPIKeyError,
+    MissingClaudeModelError, chat_completion_json,
 )
+from app.services.outreach_guidance import APPROVED_PRODUCT_FACTS
 
 
 def _safe_failure(exc: Exception) -> tuple[str, str]:
     """Return a diagnostic that cannot contain credentials or raw provider payloads."""
-    if isinstance(exc, MissingAPIKeyError):
-        return "missing_api_key", "OpenRouter API key is not configured."
-    if isinstance(exc, MissingModelError):
-        return "missing_model", "OpenRouter model is not configured."
-    if isinstance(exc, RateLimitedError):
-        return "rate_limited", "OpenRouter rate limit persisted after retries."
-    if isinstance(exc, OpenRouterTimeoutError):
-        return "timeout", "OpenRouter request timed out."
-    if isinstance(exc, BadResponseError):
-        return "bad_openrouter_response", str(exc)
+    if isinstance(exc, MissingClaudeAPIKeyError):
+        return "missing_api_key", "Claude API key is not configured."
+    if isinstance(exc, MissingClaudeModelError):
+        return "missing_model", "Claude model is not configured."
+    if isinstance(exc, ClaudeRateLimitedError):
+        return "rate_limited", "Claude API rate limit persisted after retries."
+    if isinstance(exc, ClaudeTimeoutError):
+        return "timeout", "Claude API request timed out."
+    if isinstance(exc, ClaudeAuthenticationError):
+        return "provider_auth_error", str(exc)
+    if isinstance(exc, ClaudeBadResponseError):
+        return "bad_claude_response", str(exc)
+    if isinstance(exc, ClaudeAPIError):
+        return "claude_api_error", str(exc)
     if isinstance(exc, ValueError):
         return "invalid_draft_json", "Model response did not contain a usable subject and body."
     return "draft_save_or_generation_error", "Draft generation or database save failed. Check backend configuration and database access."
 
 
 def _prompt(campaign: dict, step: dict, previous: list[dict]) -> list[dict]:
-    previous_text = json.dumps(previous, ensure_ascii=False)
+    user = {
+        "approved_product_facts": APPROVED_PRODUCT_FACTS,
+        "campaign_instructions": campaign["instructions"],
+        "email_step": {"number": step["step_number"], "context": step["context"]},
+        "previous_emails": previous,
+    }
     system = (
-        "Write a short, friendly, convincing email for an independent UK cafe or restaurant. "
-        "Mention PocketPerks Loyalty Stamp and include one clear call to action. Use only facts and "
-        "claims explicitly present in the campaign instructions and this step context. Do not invent "
-        "offers, discounts, achievements, customers, or business facts. Do not include an unsubscribe line. "
-        "Greet generically with exactly 'Hi there,'. Return only a JSON object with string keys subject and body."
+        "Write concise, natural British-English outreach for PocketPerks. Lead with the practical value of a "
+        "phone-based loyalty card, not a list of software features. Use only the approved product facts, "
+        "campaign instructions, and this step's context. The campaign and step context determine the audience "
+        "and call to action; when they identify a supported sector, use its practical concerns without assuming "
+        "unprovided details. A follow-up should be polite and add practical value without repeating the full pitch. "
+        "When no different call to action is specified, invite the prospect to a 12-minute demo; never invent "
+        "available dates or time slots. Use earlier steps to avoid repeating the same pitch. "
+        "Never imply a call, visit, prior discussion, or reply happened unless the campaign context explicitly says so. "
+        "Never invent prices beyond the approved core-card boundary, rewards, discounts, "
+        "results, integrations, customer numbers, or business facts. Do not claim increased revenue, reviews, "
+        "or customer uptake. Do not describe optional paid messaging as free or required. Do not include an "
+        "unsubscribe line; the application adds its functional opt-out wording after personalization. Do not use "
+        "fake reply/forward subject prefixes or leave placeholders. Greet generically with exactly 'Hi there,'. "
+        "Return only a JSON object with string keys subject and body."
     )
-    user = (f"Campaign instructions: {campaign['instructions']}\n"
-            f"Email step {step['step_number']} context: {step['context']}\n"
-            f"Previous email subjects and bodies (maintain a coherent follow-up sequence): {previous_text}")
-    return [{"role": "system", "content": system}, {"role": "user", "content": user}]
+    return [{"role": "system", "content": system},
+            {"role": "user", "content": json.dumps(user, ensure_ascii=False)}]
 
 
 async def generate_campaign_drafts(settings: Settings, campaign_id: str) -> dict:
