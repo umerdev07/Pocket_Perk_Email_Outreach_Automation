@@ -218,6 +218,39 @@ async def delete_email(email_id: str, *, settings: Settings | None = None) -> di
     return {"id": email_id, "already_deleted": False}
 
 
+async def get_email(email_id: str, *, settings: Settings | None = None) -> dict[str, Any]:
+    """Read one existing Unibox email for safe thread reply reconciliation."""
+    config = settings or get_settings()
+    try:
+        UUID(email_id)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("A valid Instantly email ID is required.") from exc
+    try:
+        async with httpx.AsyncClient(timeout=25.0) as session:
+            response = await session.get(f"{EMAILS_URL}/{email_id}", headers=_write_headers(config))
+    except httpx.TimeoutException as exc:
+        raise InstantlyTimeoutError("Instantly email lookup timed out.") from exc
+    except httpx.HTTPError as exc:
+        raise InstantlyRequestError("Could not communicate with Instantly to look up the email.") from exc
+    if response.status_code in (401, 403):
+        raise AuthenticationError("Instantly rejected the API key or its emails:read permission.")
+    if response.status_code == 402:
+        raise PlanAccessError("The Instantly workspace plan does not allow reading this email.")
+    if response.status_code == 404:
+        raise InstantlyRequestError("Instantly no longer has this email in Unibox.")
+    if response.status_code == 429:
+        raise RateLimitedError("Instantly rate limited the email lookup; retry later.")
+    if not response.is_success:
+        raise InstantlyRequestError(f"Instantly returned HTTP {response.status_code} while looking up the email.")
+    try:
+        result = response.json()
+    except (ValueError, TypeError) as exc:
+        raise BadResponseError("Instantly returned invalid email details.") from exc
+    if not isinstance(result, dict) or result.get("id") != email_id:
+        raise BadResponseError("Instantly returned unexpected email details.")
+    return result
+
+
 async def reply_to_email(email_id: str, sender_email: str, subject: str, body: str,
                          *, settings: Settings | None = None) -> dict[str, Any]:
     """Reply to one existing Unibox email; cannot address arbitrary recipients."""

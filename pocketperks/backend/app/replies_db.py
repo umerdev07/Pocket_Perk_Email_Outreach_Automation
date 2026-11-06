@@ -11,6 +11,7 @@ from app.integrations.instantly_client import (
     InstantlyError,
     PlanAccessError,
     delete_email as delete_instantly_email,
+    get_email as get_instantly_email,
     reply_to_email as reply_to_instantly_email,
 )
 from app.suppression_db import get_suppressed_emails, normalize_email, save_suppressions
@@ -233,10 +234,35 @@ async def send_reply(settings: Settings, reply_id: str, body: str) -> dict:
     if not rows:
         raise HTTPException(status_code=404, detail="Reply not found.")
     row = rows[0]
-    if not row.get("instantly_id") or not row.get("sender_account_email"):
-        raise HTTPException(status_code=409, detail="This message has no saved Instantly thread or sending mailbox. Refresh replies after applying the latest migration.")
+    provider_id = row.get("instantly_id")
+    if not isinstance(provider_id, str) or not provider_id.strip():
+        raise HTTPException(status_code=409, detail="This reply has no saved Instantly email ID, so it cannot be sent as a thread reply.")
+    sender_account = normalize_email(row.get("sender_account_email"))
+    if not sender_account:
+        # Older reply rows may predate migration 029 or fall outside the normal
+        # polling cursor. Resolve this exact provider email on demand, then save
+        # the mailbox locally so later replies do not need another lookup.
+        try:
+            provider_email = await get_instantly_email(provider_id, settings=settings)
+        except AuthenticationError as exc:
+            raise HTTPException(status_code=503, detail="Looking up this thread needs Instantly emails:read; sending also needs emails:create.") from exc
+        except PlanAccessError as exc:
+            raise HTTPException(status_code=503, detail="The Instantly plan does not allow looking up this Unibox thread.") from exc
+        except InstantlyError as exc:
+            raise HTTPException(status_code=502, detail=str(exc)) from exc
+        sender_account = _reply_mailbox_address(provider_email)
+        if not sender_account:
+            raise HTTPException(status_code=409, detail="Instantly did not return the sending mailbox for this thread. Check the original mailbox is still connected.")
+        mailbox_filter = (f"eq.{row['sender_account_email']}" if row.get("sender_account_email")
+                          else "is.null")
+        async with httpx.AsyncClient(timeout=20) as client:
+            saved = await client.patch(f"{_base(settings)}/replies", params={
+                "id": f"eq.{reply_id}", "sender_account_email": mailbox_filter,
+            }, headers=_headers(settings, "return=minimal"), json={"sender_account_email": sender_account})
+        if not saved.is_success:
+            raise HTTPException(status_code=503, detail="The sending mailbox was found, but could not be saved. Apply migration 029 and retry.")
     try:
-        result = await reply_to_instantly_email(str(row["instantly_id"]), str(row["sender_account_email"]),
+        result = await reply_to_instantly_email(provider_id, sender_account,
                                                 str(row.get("subject") or ""), text, settings=settings)
     except AuthenticationError as exc:
         raise HTTPException(status_code=503, detail="Instantly reply sending needs an API key with the emails:create scope.") from exc
