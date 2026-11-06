@@ -9,6 +9,7 @@ type Reply = {
   lead_id: string | null;
   campaign_id: string | null;
   from_email: string;
+  sender_account_email?: string | null;
   subject: string;
   body: string;
   received_at: string;
@@ -50,6 +51,8 @@ export default function LeadReplies({ apiBase, canManageSuppressions = false }: 
   const [releaseReason, setReleaseReason] = useState("");
   const [releaseConsent, setReleaseConsent] = useState(false);
   const [notice, setNotice] = useState("");
+  const [replyDrafts, setReplyDrafts] = useState<Record<string, string>>({});
+  const [sendReplyBusy, setSendReplyBusy] = useState("");
 
   const loadReplies = useCallback(async (showLoading = true) => {
     if (showLoading) setLoading(true);
@@ -182,6 +185,23 @@ export default function LeadReplies({ apiBase, canManageSuppressions = false }: 
     }
   }
 
+  async function sendReply(reply: Reply) {
+    const body = (replyDrafts[reply.id] || "").trim();
+    if (!body) return;
+    setSendReplyBusy(reply.id); setError(""); setNotice("");
+    try {
+      const response = await apiFetch(`${apiBase}/api/lead-replies/${reply.id}/reply`, {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ body }),
+      });
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.detail || "Could not send reply through Instantly.");
+      setReplyDrafts(current => ({ ...current, [reply.id]: "" }));
+      setNotice("Reply sent through Instantly on the existing email thread.");
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Could not send reply.");
+    } finally { setSendReplyBusy(""); }
+  }
+
   const visibleReplies = useMemo(() => replies.filter(reply => {
     if (readFilter === "unread" && reply.status !== "new") return false;
     if (readFilter === "read" && reply.status !== "read") return false;
@@ -250,7 +270,7 @@ export default function LeadReplies({ apiBase, canManageSuppressions = false }: 
               void markRead(reply);
             }}>
               <span className="reply-status-dot" aria-label={reply.status === "new" ? "Unread" : "Read"} />
-              <span className="reply-main"><b>{reply.leads?.business_name || reply.from_email}</b>
+              <span className="reply-main"><b>{reply.leads?.business_name || (reply.lead_id ? reply.from_email : `Unmatched reply · ${reply.from_email}`)}</b>
                 <small>{reply.from_email}{reply.campaigns?.name ? ` · ${reply.campaigns.name}` : ""}</small>
                 <strong>{reply.subject || "(no subject)"}</strong>
                 <span>{(cleanBody || "No new text detected; quoted email available below.").replace(/\s+/g, " ").slice(0, 180)}</span>
@@ -260,6 +280,15 @@ export default function LeadReplies({ apiBase, canManageSuppressions = false }: 
             {expanded && <div className="reply-expanded"><div className="reply-meta"><span>From <b>{reply.from_email}</b></span>
               {reply.leads?.email && <span>Lead <b>{reply.leads.email}</b></span>}{reply.campaigns?.name && <span>Campaign <b>{reply.campaigns.name}</b></span>}
             </div>{reply.opted_out && <p className="reply-opt-out-badge">On global opt-out list · future campaign sync is blocked</p>}<h3>{reply.subject || "(no subject)"}</h3><div className="reply-body-card"><p>{cleanBody || "No new reply text was detected."}</p></div>
+              {!reply.opted_out && <form className="reply-compose" onSubmit={event => { event.preventDefault(); void sendReply(reply); }}>
+                <label htmlFor={`reply-compose-${reply.id}`}>Reply via Instantly</label>
+                <textarea id={`reply-compose-${reply.id}`} rows={4} maxLength={20000} value={replyDrafts[reply.id] || ""}
+                  onChange={event => setReplyDrafts(current => ({ ...current, [reply.id]: event.target.value }))}
+                  placeholder="Write a reply to this email thread…" disabled={sendReplyBusy === reply.id}/>
+                <div><small>Sent from {reply.sender_account_email || "the original connected mailbox"}</small>
+                  <button type="submit" className="action-button" disabled={sendReplyBusy === reply.id || !replyDrafts[reply.id]?.trim()}>
+                    {sendReplyBusy === reply.id ? "Sending…" : "Send reply"}</button></div>
+              </form>}
               <div className="reply-actions"><button type="button" className="secondary-button reply-delete-button" disabled={deleteBusy === reply.id} onClick={() => void deleteLeadReply(reply)} aria-label="Delete reply from Instantly and PocketPerks"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M10 11v6m4-6v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg>{deleteBusy === reply.id ? "Deleting…" : "Delete reply"}</button>
                 <button type="button" className="secondary-button" disabled={reply.opted_out || optOutBusy === reply.id} onClick={() => void markOptOut(reply)}>{reply.opted_out ? "Opt-out recorded" : optOutBusy === reply.id ? "Saving opt-out…" : "Mark as opt-out"}</button>
                 {canManageSuppressions && reply.opted_out && <button type="button" className="secondary-button" disabled={releaseBusy === reply.id} onClick={() => {

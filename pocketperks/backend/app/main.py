@@ -20,10 +20,12 @@ from app.routers.dashboard import router as dashboard_router
 from app.routers.lead_replies import router as lead_replies_router
 from app.routers.suppressions import router as suppressions_router
 from app.routers.instantly_accounts import router as instantly_accounts_router
+from app.routers.instantly_webhooks import router as instantly_webhooks_router
 from app.services.campaign_queue_worker import run_campaign_queue_worker
 from app.services.instantly_sync_worker import run_instantly_sync_worker
 from app.services.instantly_replies_worker import run_instantly_replies_worker
 from app.services.instantly_lifecycle_worker import run_instantly_lifecycle_worker
+from app.services.instantly_webhook_worker import run_instantly_webhook_worker
 
 
 def create_app(*, auth_enabled: bool = True, queue_worker_enabled: bool = False) -> FastAPI:
@@ -42,6 +44,9 @@ def create_app(*, auth_enabled: bool = True, queue_worker_enabled: bool = False)
                     run_instantly_replies_worker(settings), name="pocketperks-instantly-replies-worker"))
                 worker_tasks.append(asyncio.create_task(
                     run_instantly_lifecycle_worker(settings), name="pocketperks-instantly-lifecycle-worker"))
+            if settings.instantly_webhook_secret:
+                worker_tasks.append(asyncio.create_task(
+                    run_instantly_webhook_worker(settings), name="pocketperks-instantly-webhook-worker"))
         yield
         for worker_task in worker_tasks:
             worker_task.cancel()
@@ -61,6 +66,7 @@ def create_app(*, auth_enabled: bool = True, queue_worker_enabled: bool = False)
     app.include_router(lead_replies_router)
     app.include_router(suppressions_router)
     app.include_router(instantly_accounts_router)
+    app.include_router(instantly_webhooks_router)
     app.add_middleware(
         CORSMiddleware,
         allow_origins=[settings.frontend_origin],
@@ -71,7 +77,9 @@ def create_app(*, auth_enabled: bool = True, queue_worker_enabled: bool = False)
     @app.middleware("http")
     async def require_workspace_access(request: Request, call_next):
         path = request.url.path
-        if not auth_enabled or not path.startswith("/api/") or path == "/api/health" or request.method == "OPTIONS":
+        if (not auth_enabled or not path.startswith("/api/") or path == "/api/health"
+                or (path == "/api/webhooks/instantly" and request.method == "POST")
+                or request.method == "OPTIONS"):
             return await call_next(request)
         try:
             user = await authenticate_request(request, settings)

@@ -11,6 +11,7 @@ from app.integrations.instantly_client import (
     InstantlyError,
     PlanAccessError,
     delete_email as delete_instantly_email,
+    reply_to_email as reply_to_instantly_email,
 )
 from app.suppression_db import get_suppressed_emails, normalize_email, save_suppressions
 
@@ -73,7 +74,7 @@ def _rows(response: httpx.Response, message: str) -> list[dict]:
 async def list_replies(settings: Settings, *, limit: int = 100, offset: int = 0) -> list[dict]:
     async with httpx.AsyncClient(timeout=20) as client:
         response = await client.get(f"{_base(settings)}/replies", params={
-            "select": "id,lead_id,campaign_id,from_email,subject,body,instantly_id,received_at,status,created_at,leads(business_name,email),campaigns(name)",
+            "select": "id,lead_id,campaign_id,from_email,sender_account_email,subject,body,instantly_id,received_at,status,created_at,leads(business_name,email),campaigns(name)",
             "order": "received_at.desc", "limit": limit, "offset": offset,
         }, headers=_headers(settings))
     rows = _rows(response, "Could not load lead replies.")
@@ -140,8 +141,8 @@ async def save_received_replies(settings: Settings, emails: list[dict]) -> int:
             if not isinstance(provider_id, str) or not provider_id or not isinstance(sender, str) or not sender.strip():
                 continue
             campaign_id = campaign_by_provider_id.get(str(item.get("campaign_id") or ""))
-            if not lead and not campaign_id:
-                continue
+            # Keep genuine inbound messages even when they cannot be mapped to
+            # an imported lead or known campaign; the inbox must not lose them.
             body_obj = item.get("body") if isinstance(item.get("body"), dict) else {}
             body = body_obj.get("text") or item.get("content_preview") or "(Reply body unavailable in provider response.)"
             if not isinstance(body, str):
@@ -153,6 +154,7 @@ async def save_received_replies(settings: Settings, emails: list[dict]) -> int:
                 "lead_id": lead.get("id") if lead else None,
                 "campaign_id": campaign_id,
                 "from_email": sender.strip().lower(),
+                "sender_account_email": str(item.get("eaccount") or "").strip().lower() or None,
                 "subject": str(item.get("subject") or "(no subject)")[:500],
                 "body": body[:20000],
                 "instantly_id": provider_id,
@@ -186,6 +188,33 @@ async def mark_reply_read(settings: Settings, reply_id: str) -> dict:
     if not rows:
         raise HTTPException(status_code=404, detail="Reply not found.")
     return rows[0]
+
+
+async def send_reply(settings: Settings, reply_id: str, body: str) -> dict:
+    """Send only a reply tied to a saved inbound Instantly email."""
+    text = body.strip()
+    if not text:
+        raise HTTPException(status_code=422, detail="Reply text cannot be empty.")
+    async with httpx.AsyncClient(timeout=20) as client:
+        response = await client.get(f"{_base(settings)}/replies", params={
+            "select": "id,instantly_id,sender_account_email,subject", "id": f"eq.{reply_id}", "limit": "1",
+        }, headers=_headers(settings))
+        rows = _rows(response, "Could not load the reply before sending.")
+    if not rows:
+        raise HTTPException(status_code=404, detail="Reply not found.")
+    row = rows[0]
+    if not row.get("instantly_id") or not row.get("sender_account_email"):
+        raise HTTPException(status_code=409, detail="This message has no saved Instantly thread or sending mailbox. Refresh replies after applying the latest migration.")
+    try:
+        result = await reply_to_instantly_email(str(row["instantly_id"]), str(row["sender_account_email"]),
+                                                str(row.get("subject") or ""), text, settings=settings)
+    except AuthenticationError as exc:
+        raise HTTPException(status_code=503, detail="Instantly reply sending needs an API key with the emails:create scope.") from exc
+    except PlanAccessError as exc:
+        raise HTTPException(status_code=503, detail="The Instantly plan does not allow sending replies through the API.") from exc
+    except InstantlyError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    return {"reply_id": reply_id, "sent": True, "provider_email_id": result.get("id")}
 
 
 async def delete_reply(settings: Settings, reply_id: str) -> dict:

@@ -63,7 +63,7 @@ async def load_lead_page(settings: Settings, batch_id: str, *, offset: int, limi
     """Fetch one stable, ordered page so large batches aren't held in memory."""
     async with httpx.AsyncClient(timeout=30) as client:
         return await _get(client, f"{_base(settings)}/leads", {
-            "select": "id,business_name,business_category,email,city,website", "batch_id": f"eq.{batch_id}",
+            "select": "id,business_name,business_category,email,city,website,verification_result,quality_flags", "batch_id": f"eq.{batch_id}",
             "order": "id.asc", "limit": str(limit), "offset": str(offset),
         }, _headers(settings))
 

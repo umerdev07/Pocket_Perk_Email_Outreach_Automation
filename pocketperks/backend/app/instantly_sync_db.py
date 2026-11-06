@@ -178,7 +178,7 @@ async def load_sync_run_context(settings: Settings, run_id: str) -> dict:
         if not isinstance(sender_emails, list) or not sender_emails:
             raise HTTPException(status_code=409, detail="Select at least one Instantly sending inbox before starting this campaign.")
         campaigns = await _checked(await client.get(f"{base}/campaigns", params={
-            "select": "id,name,total_emails,start_date,end_date,start_at,end_at,status,campaign_steps(id,step_number,generic_drafts(id,status))",
+            "select": "id,name,total_emails,start_date,end_date,start_at,end_at,timezone,status,campaign_steps(id,step_number,generic_drafts(id,status))",
             "id": f"eq.{run['campaign_id']}", "limit": "1",
         }, headers=_headers(settings)), "Could not load the approved campaign for Instantly sync.")
     if not campaigns:
@@ -266,19 +266,26 @@ async def load_active_runs_with_pending_leads(settings: Settings, *, limit: int 
     """Find campaigns whose leads became eligible after human review.
 
     Includes active campaigns with delayed approval notifications, campaigns
-    explicitly waiting for review, and older no-eligible-leads failures.
+    explicitly waiting for review, older no-eligible-leads failures, and
+    already-synced campaigns that still need their scheduled auto-launch.
     """
     base = _base(settings)
     async with httpx.AsyncClient(timeout=25) as client:
         waiting = await _checked(await client.get(f"{base}/instantly_campaign_mappings", params={
-            "select": "id,run_id", "status": "in.(active,awaiting_review)",
+            "select": "id,run_id,status", "status": "in.(active,awaiting_review)",
             "instantly_campaign_id": "not.is.null", "order": "updated_at.asc", "limit": str(limit),
         }, headers=_headers(settings)), "Could not load pending-review Instantly campaigns.")
+        launch_ready = []
+        if settings.instantly_auto_launch and settings.send_mode == "live":
+            launch_ready = await _checked(await client.get(f"{base}/instantly_campaign_mappings", params={
+                "select": "id,run_id,status", "status": "eq.leads_synced",
+                "instantly_campaign_id": "not.is.null", "order": "updated_at.asc", "limit": str(limit),
+            }, headers=_headers(settings)), "Could not load Instantly campaigns awaiting scheduled launch.")
         legacy_no_eligible = await _checked(await client.get(f"{base}/instantly_campaign_mappings", params={
             "select": "id,run_id", "status": "eq.failed", "error_detail": "eq.No eligible leads synced to Instantly.",
             "instantly_campaign_id": "not.is.null", "order": "updated_at.asc", "limit": str(limit),
         }, headers=_headers(settings)), "Could not load legacy Instantly campaigns awaiting review.")
-        mappings = waiting + legacy_no_eligible
+        mappings = waiting + launch_ready + legacy_no_eligible
         mapping_ids = [str(row["id"]) for row in mappings if row.get("id")]
         if not mapping_ids:
             return []
@@ -287,5 +294,9 @@ async def load_active_runs_with_pending_leads(settings: Settings, *, limit: int 
             "status": "eq.pending", "limit": "5000",
         }, headers=_headers(settings)), "Could not load active Instantly campaigns for recovery.")
     pending_ids = {str(row["campaign_mapping_id"]) for row in pending if row.get("campaign_mapping_id")}
+    # A leads_synced mapping has no pending lead rows, but still needs a
+    # lifecycle pass when auto-launch is enabled in live mode.
+    launch_ready_ids = {str(row["id"]) for row in launch_ready if row.get("id")}
     return list(dict.fromkeys(str(row["run_id"]) for row in mappings
-                               if row.get("run_id") and str(row.get("id")) in pending_ids))
+                               if row.get("run_id") and (str(row.get("id")) in pending_ids
+                                   or str(row.get("id")) in launch_ready_ids)))

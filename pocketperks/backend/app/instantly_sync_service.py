@@ -8,14 +8,16 @@ from zoneinfo import ZoneInfo
 from typing import Any
 
 from app.config import Settings
+from app.lead_eligibility import lead_eligibility_reason
 from app.instantly_sync_db import (create_campaign_mapping, get_lead_mapping_statuses,
                                    load_sync_run_context, load_sync_lead_page,
                                    save_lead_mappings, update_campaign_mapping)
 from app.integrations.instantly_client import (BadResponseError, InstantlyError,
                                                InstantlyTimeoutError, InstantlyWriteError,
                                                activate_campaign, add_campaign_leads, create_campaign,
-                                               list_campaign_leads)
+                                               list_campaign_leads, update_campaign_schedule)
 from app.suppression_db import get_suppressed_emails
+from app.services.risk_service import PLACEHOLDER_RE
 
 LEGACY_SCHEDULE_TIMEZONE = "Asia/Karachi"
 
@@ -28,6 +30,7 @@ def build_campaign_payload(campaign: dict[str, Any], steps: list[dict[str, Any]]
         raise ValueError("Campaign name is required for Instantly sync.")
     start_at, end_at = campaign.get("start_at"), campaign.get("end_at")
     start_date, end_date = campaign.get("start_date"), campaign.get("end_date")
+    start_local = end_local = None
     if start_at and end_at:
         try:
             start_dt = datetime.fromisoformat(str(start_at).replace("Z", "+00:00"))
@@ -35,8 +38,10 @@ def build_campaign_payload(campaign: dict[str, Any], steps: list[dict[str, Any]]
             if start_dt.tzinfo is None or end_dt.tzinfo is None:
                 raise ValueError
             schedule_timezone = ZoneInfo(str(campaign.get("timezone") or LEGACY_SCHEDULE_TIMEZONE))
-            start = start_dt.astimezone(schedule_timezone).date()
-            end = end_dt.astimezone(schedule_timezone).date()
+            start_local = start_dt.astimezone(schedule_timezone)
+            end_local = end_dt.astimezone(schedule_timezone)
+            start = start_local.date()
+            end = end_local.date()
         except (ValueError, TypeError) as exc:
             raise ValueError("Campaign start and end timestamps must be timezone-aware ISO values.") from exc
     elif start_date and end_date:
@@ -49,6 +54,17 @@ def build_campaign_payload(campaign: dict[str, Any], steps: list[dict[str, Any]]
         raise ValueError("Campaign start and end dates are required for Instantly sync.")
     if end < start:
         raise ValueError("Campaign end date cannot be before its start date.")
+    if start_local is not None and end_local is not None:
+        daily_start = start_local.strftime("%H:%M")
+        daily_end = end_local.strftime("%H:%M")
+        # Instantly's daily window cannot represent an overnight interval.
+        # Keep that provider window open for the calendar day; PocketPerks'
+        # lifecycle worker still activates at start_at and pauses at end_at.
+        if daily_end <= daily_start:
+            daily_start, daily_end = "00:00", "23:59"
+    else:
+        # Legacy date-only campaign records retain their previous office hours.
+        daily_start, daily_end = "09:00", "17:00"
     if type(delay_hours) is not int or not 1 <= delay_hours <= 72:
         raise ValueError("Follow-up delay must be between 1 and 72 hours.")
     if not isinstance(steps, list) or not steps:
@@ -84,7 +100,7 @@ def build_campaign_payload(campaign: dict[str, Any], steps: list[dict[str, Any]]
             "end_date": end.isoformat(),
             "schedules": [{
                 "name": "PocketPerks UK weekdays",
-                "timing": {"from": "09:00", "to": "17:00"},
+                "timing": {"from": daily_start, "to": daily_end},
                 "days": {"0": False, "1": True, "2": True, "3": True,
                          "4": True, "5": True, "6": False},
                 "timezone": str(campaign.get("timezone") or LEGACY_SCHEDULE_TIMEZONE),
@@ -111,6 +127,8 @@ def build_lead_payload(lead: dict[str, Any], personalized_steps: list[dict[str, 
         subject, body = step.get("subject"), step.get("body")
         if not isinstance(subject, str) or not subject.strip() or not isinstance(body, str) or not body.strip():
             raise ValueError("Every queued email needs a subject and body.")
+        if PLACEHOLDER_RE.search(subject) or PLACEHOLDER_RE.search(body):
+            raise ValueError("Personalized email still contains an unresolved placeholder.")
         variables[f"pp_email_{index}_subject"] = subject.strip()
         body_text = body.strip()
         opt_out_line = "To stop future PocketPerks emails, reply STOP."
@@ -163,6 +181,7 @@ async def sync_completed_run(settings: Settings, run_id: str) -> dict[str, Any]:
         raise RuntimeError("This run has a different saved Instantly sender selection; reconcile it before retrying.")
     provider_campaign_id = mapping.get("instantly_campaign_id")
     provider_campaign_was_active = mapping.get("status") == "active"
+    campaign_was_created = False
     if mapping.get("status") == "launching":
         return {"run_id": run_id, "instantly_campaign_id": provider_campaign_id,
                 "synced": 0, "skipped": 0, "failed": 0, "unknown": 0,
@@ -181,14 +200,14 @@ async def sync_completed_run(settings: Settings, run_id: str) -> dict[str, Any]:
     )
     if mapping.get("status") == "failed" and not retryable_sync_failure:
         raise RuntimeError("Instantly campaign mapping is failed; reconcile provider state before retrying.")
+    campaign_payload = build_campaign_payload(campaign, campaign["steps"],
+                                              delay_hours=settings.instantly_followup_delay_hours,
+                                              sender_emails=sender_emails)
     if not provider_campaign_id:
         if mapping.get("status") == "failed":
             raise RuntimeError("Instantly campaign creation needs manual reconciliation before retry.")
-        payload = build_campaign_payload(campaign, campaign["steps"],
-                                         delay_hours=settings.instantly_followup_delay_hours,
-                                         sender_emails=sender_emails)
         try:
-            created = await create_campaign(payload, settings)
+            created = await create_campaign(campaign_payload, settings)
         except (InstantlyTimeoutError, InstantlyWriteError, BadResponseError) as exc:
             # Keep a safe provider diagnostic so an operator can distinguish a
             # rejected request (for example HTTP 400) from an ambiguous write.
@@ -213,6 +232,7 @@ async def sync_completed_run(settings: Settings, run_id: str) -> dict[str, Any]:
         await update_campaign_mapping(settings, mapping["id"], {
             "instantly_campaign_id": provider_campaign_id, "status": "draft_created", "error_detail": None,
         })
+        campaign_was_created = True
 
     counts = {"synced": 0, "skipped": 0, "failed": 0, "unknown": 0}
     held_for_review = 0
@@ -236,6 +256,15 @@ async def sync_completed_run(settings: Settings, run_id: str) -> dict[str, Any]:
             if previous and previous.get("status") in {"synced", "skipped", "failed"}:
                 counts[previous["status"]] += 1
                 continue
+            eligibility_reason = lead_eligibility_reason(lead, getattr(settings, "lead_eligibility_mode", "advisory"))
+            if eligibility_reason:
+                counts["skipped"] += 1
+                held_for_review += 1
+                # Keep a pending mapping so an operator can correct an address or
+                # verification metadata and the recovery worker can reassess it.
+                held_mapping_rows.append({"lead_id": str(lead["id"]), "status": "pending",
+                                          "error_detail": eligibility_reason})
+                continue
             if str(lead.get("email") or "").strip().lower() in suppressed_emails:
                 counts["skipped"] += 1
                 suppressed_mapping_rows.append({"lead_id": str(lead["id"]), "status": "skipped",
@@ -252,11 +281,14 @@ async def sync_completed_run(settings: Settings, run_id: str) -> dict[str, Any]:
                 continue
             try:
                 provider_lead = build_lead_payload(lead, emails)
-            except ValueError:
+            except ValueError as exc:
                 counts["skipped"] += 1
                 held_for_review += 1
+                reason = ("Held because a personalized email still contains a placeholder; edit it and re-approve."
+                          if "placeholder" in str(exc).lower() else
+                          "Held because the complete personalized email sequence is not ready for sync.")
                 held_mapping_rows.append({"lead_id": str(lead["id"]), "status": "pending",
-                                          "error_detail": "Held because the complete personalized email sequence is not ready for sync."})
+                                          "error_detail": reason})
                 continue
             candidates.append(provider_lead)
             mapping_rows.append({"lead_id": str(lead["id"]), "status": "unknown",
@@ -363,6 +395,11 @@ async def sync_completed_run(settings: Settings, run_id: str) -> dict[str, Any]:
 
     unresolved = counts["unknown"] + counts["failed"]
     waiting_for_review = held_for_review > 0 and counts["synced"] == 0 and not unresolved
+    if counts["synced"] > 0 and not provider_campaign_was_active and not campaign_was_created:
+        # Existing drafts may have been created by an older backend with a
+        # default send window. Align the provider schedule before auto-launch.
+        await update_campaign_schedule(provider_campaign_id, campaign_payload["name"],
+                                       campaign_payload["campaign_schedule"], settings)
     await update_campaign_mapping(settings, mapping["id"], {
         "status": "active" if provider_campaign_was_active else "failed" if unresolved
         else "awaiting_review" if waiting_for_review else "leads_synced",

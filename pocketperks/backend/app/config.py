@@ -14,6 +14,8 @@ class Settings(BaseSettings):
     openrouter_api_key: str = ""
     openrouter_model: str = ""
     instantly_api_key: str = ""
+    instantly_webhook_secret: str = ""
+    lead_eligibility_mode: Literal["advisory", "strict"] = "advisory"
     # A conservative few-hour follow-up gap between sequence emails.
     instantly_followup_delay_hours: int = Field(default=4, ge=1, le=72)
     instantly_auto_launch: bool = False

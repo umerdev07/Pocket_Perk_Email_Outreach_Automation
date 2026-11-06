@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field, model_validator
 from app.approvals_db import (get_email_review_context, list_pending_approvals,
                               list_review_history, update_review_email)
 from app.config import Settings, get_settings
-from app.services.risk_service import assess_personalized_email
+from app.services.risk_service import PLACEHOLDER_RE, assess_personalized_email
 
 router = APIRouter(tags=["human approvals"])
 
@@ -96,6 +96,11 @@ async def approve_personalized_email(email_id: UUID, settings: Settings = Depend
     email = context["email"]
     if email["status"] != "pending_review":
         raise HTTPException(status_code=409, detail="Only emails in the human approval queue can be approved.")
+    if PLACEHOLDER_RE.search(email["subject"] or "") or PLACEHOLDER_RE.search(email["body"] or ""):
+        raise HTTPException(
+            status_code=409,
+            detail="This email still contains a placeholder. Edit it (for example, replace [Your Name]) before approval.",
+        )
     content_hash = hashlib.sha256(f"{email['subject']}\0{email['body']}".encode("utf-8")).hexdigest()
     return await update_review_email(settings, str(email_id), "pending_review", {
         # Approved means explicitly reviewed and ready for the future sending worker.

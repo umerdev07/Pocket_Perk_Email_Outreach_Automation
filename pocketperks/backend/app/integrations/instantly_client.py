@@ -9,6 +9,7 @@ the sync service gates activation behind reviewed data, schedule, and runtime
 configuration so draft creation alone never starts outreach.
 """
 import asyncio
+import html
 from typing import Any
 from uuid import UUID
 
@@ -217,6 +218,33 @@ async def delete_email(email_id: str, *, settings: Settings | None = None) -> di
     return {"id": email_id, "already_deleted": False}
 
 
+async def reply_to_email(email_id: str, sender_email: str, subject: str, body: str,
+                         *, settings: Settings | None = None) -> dict[str, Any]:
+    """Reply to one existing Unibox email; cannot address arbitrary recipients."""
+    config = settings or get_settings()
+    try:
+        UUID(email_id)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("A valid Instantly email ID is required to reply.") from exc
+    if not isinstance(sender_email, str) or "@" not in sender_email:
+        raise ValueError("A valid connected sending mailbox is required.")
+    text = body.strip() if isinstance(body, str) else ""
+    if not text or len(text) > 20_000:
+        raise ValueError("Reply text must contain 1 to 20,000 characters.")
+    clean_subject = subject.strip() if isinstance(subject, str) else ""
+    reply_subject = clean_subject if clean_subject.casefold().startswith("re:") else f"Re: {clean_subject or 'your email'}"
+    payload = {
+        "eaccount": sender_email.strip().lower(), "reply_to_uuid": email_id,
+        "subject": reply_subject[:500],
+        "body": {"text": text, "html": "<br>".join(html.escape(line) for line in text.splitlines())},
+    }
+    result = await _post_write(f"{EMAILS_URL}/reply", payload, settings=config, action="email reply")
+    provider_id = result.get("id")
+    if provider_id is not None and not isinstance(provider_id, str):
+        raise BadResponseError("Instantly returned an invalid reply identifier.")
+    return {"id": provider_id}
+
+
 async def list_campaign_sent_emails(campaign_id: str, *, settings: Settings | None = None,
                                     limit: int = 100,
                                     min_timestamp_created: str | None = None) -> list[dict[str, Any]]:
@@ -351,6 +379,30 @@ async def create_campaign(payload: dict[str, Any], settings: Settings | None = N
         raise BadResponseError("Instantly returned an invalid campaign ID.") from exc
     return {"id": campaign_id, "name": result.get("name", payload["name"]),
             "status": result.get("status", "draft")}
+
+
+async def update_campaign_schedule(campaign_id: str, name: str, campaign_schedule: dict[str, Any],
+                                   settings: Settings | None = None) -> None:
+    """Keep an existing inactive campaign's schedule aligned with PocketPerks."""
+    config = settings or get_settings()
+    try:
+        UUID(campaign_id)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("A valid Instantly campaign ID is required.") from exc
+    if not isinstance(name, str) or not name.strip() or not isinstance(campaign_schedule, dict):
+        raise ValueError("Campaign schedule update needs a name and schedule.")
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as session:
+            response = await session.patch(
+                f"{CAMPAIGNS_URL}/{campaign_id}", headers=_write_headers(config),
+                json={"name": name.strip(), "campaign_schedule": campaign_schedule},
+            )
+    except httpx.TimeoutException as exc:
+        raise InstantlyTimeoutError("Instantly schedule update timed out; check campaign settings before retrying.") from exc
+    except httpx.HTTPError as exc:
+        raise InstantlyRequestError("Could not communicate with Instantly while updating the campaign schedule.") from exc
+    if not response.is_success:
+        _write_error(response, "campaign schedule update")
 
 
 async def set_campaign_sending_accounts(campaign_id: str, emails: list[str],
