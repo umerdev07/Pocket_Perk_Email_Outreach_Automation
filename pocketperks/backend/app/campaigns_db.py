@@ -16,7 +16,23 @@ def _base(settings: Settings) -> str:
     return f"{settings.supabase_url.rstrip('/')}/rest/v1"
 
 
-async def create_campaign(settings: Settings, campaign: dict, contexts: list[str], delays_minutes: list[int]) -> dict:
+async def _save_step_triggers(settings: Settings, steps: list[dict], triggers: list[str]) -> None:
+    """Persist manual conversation triggers against the IDs created by the schedule RPC."""
+    updates = [{"step_id": step["id"], "trigger_type": trigger}
+               for index, (step, trigger) in enumerate(zip(steps, triggers, strict=True)) if index > 0]
+    if not updates:
+        return
+    async with httpx.AsyncClient(timeout=20) as client:
+        response = await client.post(
+            f"{_base(settings)}/rpc/set_campaign_step_triggers",
+            headers=_headers(settings), json={"step_triggers": updates},
+        )
+    if not response.is_success:
+        raise HTTPException(status_code=503, detail="Campaign was saved, but email trigger settings could not be saved. Apply migration 033 and retry editing the campaign.")
+
+
+async def create_campaign(settings: Settings, campaign: dict, contexts: list[str], delays_minutes: list[int],
+                          triggers: list[str]) -> dict:
     async with httpx.AsyncClient(timeout=20) as client:
         response = await client.post(
             f"{_base(settings)}/rpc/create_campaign_with_schedule",
@@ -27,13 +43,17 @@ async def create_campaign(settings: Settings, campaign: dict, contexts: list[str
     if not response.is_success:
         raise HTTPException(status_code=503, detail="Could not save the campaign.")
     payload = response.json()
-    return payload[0] if isinstance(payload, list) else payload
+    result = payload[0] if isinstance(payload, list) else payload
+    await _save_step_triggers(settings, result.get("steps", []), triggers)
+    for step, trigger in zip(result.get("steps", []), triggers, strict=True):
+        step["trigger_type"] = trigger
+    return result
 
 
 async def list_campaigns(settings: Settings) -> list[dict]:
     async with httpx.AsyncClient(timeout=15) as client:
         response = await client.get(f"{_base(settings)}/campaigns", params={
-            "select": "id,name,total_emails,start_date,end_date,start_at,end_at,timezone,daily_send_start,daily_send_end,sending_days,status,created_at,campaign_steps(step_number,delay_days,delay_minutes),campaign_runs(id)", "order": "created_at.desc",
+            "select": "id,name,total_emails,start_date,end_date,start_at,end_at,timezone,daily_send_start,daily_send_end,sending_days,status,created_at,campaign_steps(step_number,delay_days,delay_minutes,trigger_type),campaign_runs(id)", "order": "created_at.desc",
         }, headers=_headers(settings))
     if not response.is_success:
         raise HTTPException(status_code=503, detail="Could not load campaigns.")
@@ -46,7 +66,7 @@ async def list_campaigns(settings: Settings) -> list[dict]:
 
 
 async def update_campaign(settings: Settings, campaign_id: str, campaign: dict,
-                          contexts: list[str], delays_minutes: list[int]) -> dict:
+                          contexts: list[str], delays_minutes: list[int], triggers: list[str]) -> dict:
     async with httpx.AsyncClient(timeout=25) as client:
         response = await client.post(
             f"{_base(settings)}/rpc/update_campaign_with_schedule",
@@ -68,13 +88,16 @@ async def update_campaign(settings: Settings, campaign_id: str, campaign: dict,
         raise HTTPException(status_code=409, detail="Campaign drafts are currently being generated. Wait for generation to finish before editing.")
     if result.get("updated") is not True:
         raise HTTPException(status_code=503, detail="Campaign update could not be confirmed.")
+    await _save_step_triggers(settings, result.get("steps", []), triggers)
+    for step, trigger in zip(result.get("steps", []), triggers, strict=True):
+        step["trigger_type"] = trigger
     return result
 
 
 async def get_campaign(settings: Settings, campaign_id: str) -> dict | None:
     async with httpx.AsyncClient(timeout=15) as client:
         response = await client.get(f"{_base(settings)}/campaigns", params={
-            "select": "id,name,total_emails,start_date,end_date,start_at,end_at,timezone,daily_send_start,daily_send_end,sending_days,instructions,status,created_at,campaign_steps(id,step_number,context,delay_days,delay_minutes,generic_drafts(id,subject,body,status,approved_at,generation_status,generation_error,generation_started_at,generation_finished_at))",
+            "select": "id,name,total_emails,start_date,end_date,start_at,end_at,timezone,daily_send_start,daily_send_end,sending_days,instructions,status,created_at,campaign_steps(id,step_number,context,delay_days,delay_minutes,trigger_type,generic_drafts(id,subject,body,status,approved_at,generation_status,generation_error,generation_started_at,generation_finished_at))",
             "id": f"eq.{campaign_id}", "limit": "1",
         }, headers=_headers(settings))
     if not response.is_success:

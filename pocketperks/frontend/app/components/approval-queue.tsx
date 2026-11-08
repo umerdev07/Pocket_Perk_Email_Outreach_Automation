@@ -13,7 +13,7 @@ type ApprovalEmail = {
   risk_reason: string;
   lead: { business_name?: string; email?: string; business_category?: string; city?: string };
   campaign: { name?: string; instructions?: string };
-  step: { step_number?: number; context?: string };
+  step: { step_number?: number; context?: string; trigger_type?: "scheduled"|"after_conversation"|"close_loop" };
 };
 
 type QueuePage = { items: ApprovalEmail[]; total: number; has_more: boolean };
@@ -97,6 +97,7 @@ export default function ApprovalQueue({ apiBase, notify }: Props) {
       if (!response.ok) throw new Error(data.detail || "Could not save this email edit.");
       await loadQueue();
       notify(data.status === "queued" ? "Email saved and queued after the spam-risk check. It has not been sent."
+        : data.status === "approved" ? "Email saved and ready for the manual conversation trigger."
         : "Email saved. A spam-risk signal still needs human review.");
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Could not save this email edit.");
@@ -111,15 +112,16 @@ export default function ApprovalQueue({ apiBase, notify }: Props) {
     setError("");
     try {
       const response = await apiFetch(`${apiBase}/api/emails/${selected.id}/recheck`, { method: "POST" });
-      const data = await response.json() as { auto_queued?: boolean; risk_level?: "LOW" | "MEDIUM" | "HIGH";
+      const data = await response.json() as { auto_queued?: boolean; ready_for_manual_trigger?: boolean; risk_level?: "LOW" | "MEDIUM" | "HIGH";
         risk_reason?: string; detail?: string };
       if (!response.ok) throw new Error(data.detail || "Could not recheck this email.");
-      if (data.auto_queued) {
+      if (data.auto_queued || data.ready_for_manual_trigger) {
         const remaining = items.filter(item => item.id !== selected.id);
         setItems(remaining);
         setTotal(count => Math.max(0, count - 1));
         setSelectedId(remaining[0]?.id || "");
-        notify("Risk rechecked: low risk and queued. It has not been sent.");
+        notify(data.ready_for_manual_trigger ? "Risk rechecked: email is ready for its manual conversation trigger."
+          : "Risk rechecked: low risk and queued. It has not been sent.");
       } else {
         setItems(current => current.map(item => item.id === selected.id ? {
           ...item, risk_level: data.risk_level || item.risk_level,
@@ -146,7 +148,8 @@ export default function ApprovalQueue({ apiBase, notify }: Props) {
       setItems(remaining);
       setTotal(count => Math.max(0, count - 1));
       setSelectedId(remaining[0]?.id || "");
-      notify(action === "approve" ? "Email approved and queued. It has not been sent." : "Email rejected");
+      notify(action === "approve" ? (selected.step.trigger_type === "after_conversation"
+        ? "Email approved and ready for its manual conversation trigger." : "Email approved and queued. It has not been sent.") : "Email rejected");
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : `Could not ${action} this email.`);
     } finally {
@@ -223,7 +226,9 @@ export default function ApprovalQueue({ apiBase, notify }: Props) {
             <div className="risk-reason"><b>Why this email may look like spam</b><p>{selected.risk_reason || "The content check flagged this email for review."}</p></div>
             <p className="approval-context"><b>Campaign instructions:</b> {selected.campaign.instructions || "No campaign instructions recorded."}</p>
             {selected.step.context && <p className="approval-context"><b>Email context:</b> {selected.step.context}</p>}
-            <p className="approval-send-note">Approving places this email in the send queue. It will not be marked sent until Instantly confirms a real send.</p>
+            <p className="approval-send-note">{selected.step.trigger_type === "after_conversation"
+              ? "Approval prepares this email, but it will only send after you confirm a real visit or conversation in the run’s email view."
+              : "Approving places this email in the send queue. It will not be marked sent until Instantly confirms a real send."}</p>
             <label className="approval-field">To<input type="email" value={selected.lead.email || "Recipient email unavailable"} readOnly /></label>
             <label className="approval-field">Subject<input value={subject} onChange={event => setSubject(event.target.value)} /></label>
             <label className="approval-field">Email body<textarea rows={10} value={body} onChange={event => setBody(event.target.value)} /></label>

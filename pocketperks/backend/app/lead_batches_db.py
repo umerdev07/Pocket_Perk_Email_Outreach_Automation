@@ -35,7 +35,7 @@ async def get_lead_batch_details(settings: Settings, batch_id: str, *, view: str
         batch = batches[0]
         if view == "imported":
             rows_response = await client.get(f"{base}/leads", params={
-                "select": "id,business_name,business_category,email,phone,website,domain,city,full_address,email_source_url,verification_result,verification_tool,quality_flags",
+                "select": "id,business_name,first_name,business_category,email,phone,website,domain,city,full_address,email_source_url,verification_result,verification_tool,quality_flags",
                 "batch_id": f"eq.{batch_id}", "order": "created_at.asc,id.asc",
                 "limit": str(limit), "offset": str(offset),
             }, headers={**headers, "Prefer": "count=exact"})
@@ -60,7 +60,7 @@ async def get_batch_lead_personalized_emails(settings: Settings, batch_id: str, 
     base, headers = _base(settings), _headers(settings)
     async with httpx.AsyncClient(timeout=30) as client:
         lead_response = await client.get(f"{base}/leads", params={
-            "select": "id,batch_id,business_name,business_category,email,city,website",
+            "select": "id,batch_id,business_name,first_name,business_category,email,city,website",
             "id": f"eq.{lead_id}", "batch_id": f"eq.{batch_id}", "limit": "1",
         }, headers=headers)
         if not lead_response.is_success:

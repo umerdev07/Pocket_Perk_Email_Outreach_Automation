@@ -528,3 +528,10 @@ Koi fake business data repo mein nahi. Testing ke liye user apni asli (ya sample
 - Personalization now explicitly adapts generic sector language to the imported business category; missing or ambiguous categories stay sector-neutral. Added restaurant framing based only on general approved product facts.
 - Added a defense-in-depth high-risk flag for internal-source wording in the existing content risk scan, including manually edited copy.
 - Backend syntax compilation passed. No database migration or frontend change is required. Automated tests, deployment, and push have not yet been run/performed.
+
+### Email workflow aligned to the Harrogate kit (2026-11-08)
+- Optional lead first-name import with fallback greeting order: first name, business name, “Hi there”. Per-lead prompts continue to adapt to the imported café, restaurant, barber or sandwich-shop category in mixed batches and keep missing categories neutral.
+- Email 2 defaults to a 3-day wait in both UI and API. Later steps support timed follow-ups, a no-reply close-loop step (Instantly stops the sequence on reply; default 12-day wait after Email 2 approximates day 15), and a manual after-visit/conversation trigger.
+- Manual conversation follow-ups are omitted from the scheduled Instantly sequence. A reviewer must confirm the real event and invoke a thread-bound send; durable state blocks duplicate sends and ambiguous results require reconciliation.
+- Configurable sender/company/website footer and optional phone; canonical opt-out text is “reply 'no thanks'” and the reply parser maps it to the global suppression behavior. Only approved product facts are allowed; unconfirmed review, reporting and pilot claims stay excluded.
+- Non-email Harrogate material remains a later sales-playbook scope. Apply migrations `032_email_workflow_profile.sql` and `033_manual_conversation_email.sql` in order. Local Python syntax compilation and frontend TypeScript typecheck passed; automated tests and live sends were not run.

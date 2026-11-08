@@ -32,7 +32,7 @@ async def start_campaign_run(settings: Settings, campaign_id: str, batch_id: str
     headers = _headers(settings)
     async with httpx.AsyncClient(timeout=15) as client:
         campaign_response = await client.get(f"{base}/campaigns", params={
-            "select": "id,status,start_at,end_at,timezone,daily_send_start,daily_send_end,sending_days,campaign_steps(step_number,delay_days,delay_minutes)",
+            "select": "id,status,start_at,end_at,timezone,daily_send_start,daily_send_end,sending_days,campaign_steps(step_number,delay_days,delay_minutes,trigger_type)",
             "id": f"eq.{campaign_id}", "limit": "1",
         }, headers=headers)
         if not campaign_response.is_success:
@@ -112,6 +112,7 @@ def _campaign_window_estimate(campaign: dict, total_leads: int,
         configured_days = campaign.get("sending_days") or [1, 2, 3, 4, 5]
         allowed_weekdays = {(int(day) - 1) % 7 for day in configured_days}
         steps = sorted(campaign.get("campaign_steps") or [], key=lambda row: row.get("step_number", 0))
+        steps = [step for step in steps if step.get("trigger_type", "scheduled") != "after_conversation"]
         if not steps:
             return None
         followup_days = sum(math.ceil(max(0, int(step.get("delay_minutes") if step.get("delay_minutes") is not None

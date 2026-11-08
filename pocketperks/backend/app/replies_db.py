@@ -17,7 +17,7 @@ from app.integrations.instantly_client import (
 from app.suppression_db import get_suppressed_emails, normalize_email, save_suppressions
 
 _OPT_OUT_RE = re.compile(
-    r"\b(?:unsubscribe(?:\s+me)?|opt\s+me\s+out|remove\s+me\s+from\s+(?:your\s+)?(?:list|mailing\s+list)|"
+    r"\b(?:no\s+thanks|unsubscribe(?:\s+me)?|opt\s+me\s+out|remove\s+me\s+from\s+(?:your\s+)?(?:list|mailing\s+list)|"
     r"take\s+me\s+off\s+(?:your\s+)?(?:list|mailing\s+list)|do\s+not\s+(?:email|contact)\s+me|"
     r"don't\s+(?:email|contact)\s+me|i\s+don't\s+want\s+(?:any\s+)?(?:more\s+)?emails?|"
     r"no\s+more\s+emails|stop\s+(?:emailing|contacting|sending\s+me\s+emails?))\b",

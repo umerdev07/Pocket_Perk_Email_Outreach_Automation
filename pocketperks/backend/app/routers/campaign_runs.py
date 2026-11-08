@@ -10,6 +10,7 @@ from app.personalization_db import get_run_lead_personalized_emails, get_run_per
 from app.instantly_sender_service import assign_senders_and_continue, is_sending_account_ready
 from app.integrations.instantly_client import InstantlyError, list_sending_accounts
 from app.services.personalization_service import process_campaign_run
+from app.manual_followup import send_after_conversation
 
 router = APIRouter(prefix="/api/campaigns", tags=["campaign runs"])
 runs_router = APIRouter(prefix="/api/campaign-runs", tags=["campaign runs"])
@@ -22,6 +23,10 @@ class StartCampaignRequest(BaseModel):
 
 class AssignSendersRequest(BaseModel):
     email_accounts: list[str] = Field(min_length=1, max_length=10)
+
+
+class ConversationSendRequest(BaseModel):
+    confirm_conversation: bool
 
 
 @router.post("/{campaign_id}/start")
@@ -84,3 +89,11 @@ async def campaign_run_emails(run_id: UUID, limit: int = Query(default=30, ge=1,
 @runs_router.get("/{run_id}/leads/{lead_id}/emails")
 async def campaign_run_lead_emails(run_id: UUID, lead_id: UUID, settings: Settings = Depends(get_settings)):
     return await get_run_lead_personalized_emails(settings, str(run_id), str(lead_id))
+
+
+@runs_router.post("/{run_id}/emails/{email_id}/send-after-conversation")
+async def send_conversation_followup(run_id: UUID, email_id: UUID, payload: ConversationSendRequest,
+                                    settings: Settings = Depends(get_settings)):
+    # The helper verifies run ownership by including run_id in its lookup.
+    return await send_after_conversation(settings, str(email_id), payload.confirm_conversation,
+                                         expected_run_id=str(run_id))

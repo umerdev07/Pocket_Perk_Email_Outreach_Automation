@@ -7,7 +7,7 @@ from datetime import UTC, date, datetime
 from zoneinfo import ZoneInfo
 from typing import Any
 
-from app.config import Settings
+from app.config import Settings, get_settings
 from app.lead_eligibility import lead_eligibility_reason
 from app.instantly_sync_db import (create_campaign_mapping, get_lead_mapping_statuses,
                                    load_sync_run_context, load_sync_lead_page,
@@ -18,6 +18,7 @@ from app.integrations.instantly_client import (BadResponseError, InstantlyError,
                                                list_campaign_leads, update_campaign_schedule)
 from app.suppression_db import get_suppressed_emails
 from app.services.risk_service import PLACEHOLDER_RE
+from app.services.email_footer import append_outreach_footer
 
 LEGACY_SCHEDULE_TIMEZONE = "Asia/Karachi"
 
@@ -77,11 +78,16 @@ def build_campaign_payload(campaign: dict[str, Any], steps: list[dict[str, Any]]
     for index, step in enumerate(ordered, start=1):
         if step.get("step_number") != index:
             raise ValueError("Campaign steps must be numbered consecutively from 1.")
+        trigger_type = step.get("trigger_type", "scheduled")
+        if trigger_type not in {"scheduled", "after_conversation", "close_loop"}:
+            raise ValueError("Campaign email step has an invalid trigger type.")
+        if index == 1 and trigger_type != "scheduled":
+            raise ValueError("Email 1 must be an automatically scheduled step.")
         delay_minutes = step.get("delay_minutes")
         if delay_minutes is None:
             legacy_days = step.get("delay_days")
             if legacy_days is None:
-                delay_minutes = 0 if index == 1 else 240
+                delay_minutes = 0 if index == 1 else 4320
             else:
                 if type(legacy_days) is not int or legacy_days < 0:
                     raise ValueError("Every campaign step needs a non-negative delay.")
@@ -100,6 +106,8 @@ def build_campaign_payload(campaign: dict[str, Any], steps: list[dict[str, Any]]
         draft_approved = isinstance(draft, dict) and draft.get("status") == "approved"
         if step.get("status") != "approved" and step.get("draft_status") != "approved" and not draft_approved:
             raise ValueError("Every campaign step must have an approved generic draft.")
+        if trigger_type == "after_conversation":
+            continue
         sequence_steps.append({
             "type": "email",
             # The campaign's saved step delay is authoritative. Instantly then
@@ -107,8 +115,8 @@ def build_campaign_payload(campaign: dict[str, Any], steps: list[dict[str, Any]]
             "delay": delay,
             "delay_unit": delay_unit,
             "variants": [{
-                "subject": "{{pp_email_" + str(index) + "_subject}}",
-                "body": "{{pp_email_" + str(index) + "_body}}",
+                "subject": "{{pp_email_" + str(step['step_number']) + "_subject}}",
+                "body": "{{pp_email_" + str(step['step_number']) + "_body}}",
             }],
         })
 
@@ -133,7 +141,8 @@ def build_campaign_payload(campaign: dict[str, Any], steps: list[dict[str, Any]]
     }
 
 
-def build_lead_payload(lead: dict[str, Any], personalized_steps: list[dict[str, Any]]) -> dict[str, Any]:
+def build_lead_payload(lead: dict[str, Any], personalized_steps: list[dict[str, Any]],
+                       settings: Settings | None = None) -> dict[str, Any]:
     """Map a fully reviewed lead and its step copy to Instantly custom variables."""
     email = lead.get("email") if isinstance(lead, dict) else None
     if not isinstance(email, str) or not email.strip():
@@ -143,8 +152,9 @@ def build_lead_payload(lead: dict[str, Any], personalized_steps: list[dict[str, 
 
     ordered = sorted(personalized_steps, key=lambda item: item.get("step_number", 0))
     variables: dict[str, str] = {}
-    for index, step in enumerate(ordered, start=1):
-        if step.get("step_number") != index or step.get("status") != "queued":
+    for step in ordered:
+        index = step.get("step_number")
+        if type(index) is not int or step.get("status") != "queued":
             raise ValueError("Only a complete sequence of queued emails can be synced.")
         subject, body = step.get("subject"), step.get("body")
         if not isinstance(subject, str) or not subject.strip() or not isinstance(body, str) or not body.strip():
@@ -152,17 +162,13 @@ def build_lead_payload(lead: dict[str, Any], personalized_steps: list[dict[str, 
         if PLACEHOLDER_RE.search(subject) or PLACEHOLDER_RE.search(body):
             raise ValueError("Personalized email still contains an unresolved placeholder.")
         variables[f"pp_email_{index}_subject"] = subject.strip()
-        body_text = body.strip()
-        opt_out_line = "To stop future PocketPerks emails, reply STOP."
-        if "reply stop" not in body_text.lower() and "unsubscribe" not in body_text.lower():
-            body_text = f"{body_text}\n\n{opt_out_line}"
-        variables[f"pp_email_{index}_body"] = body_text
+        variables[f"pp_email_{index}_body"] = append_outreach_footer(body.strip(), settings or get_settings())
 
     business_name = lead.get("business_name") or ""
     return {
         "email": email.strip().lower(),
         "company_name": str(business_name),
-        "first_name": str(business_name),
+        "first_name": str(lead.get("first_name") or ""),
         "website": str(lead.get("website") or ""),
         "phone": str(lead.get("phone") or ""),
         "custom_variables": variables,
@@ -258,7 +264,8 @@ async def sync_completed_run(settings: Settings, run_id: str) -> dict[str, Any]:
     counts = {"synced": 0, "skipped": 0, "failed": 0, "unknown": 0}
     held_for_review = 0
     offset, page_size, provider_batch_size = 0, 500, 100
-    step_count = len(campaign["steps"])
+    automatic_steps = [step for step in campaign["steps"] if step.get("trigger_type", "scheduled") != "after_conversation"]
+    step_count = len(automatic_steps)
     while True:
         leads = await load_sync_lead_page(settings, run_id, str(run["batch_id"]),
                                           offset=offset, limit=page_size)
@@ -292,16 +299,17 @@ async def sync_completed_run(settings: Settings, run_id: str) -> dict[str, Any]:
                                                 "error_detail": "Recipient opted out; address is on the global suppression list."})
                 continue
             emails = sorted(lead.get("personalized_steps", []), key=lambda item: item.get("step_number") or 0)
+            automatic_emails = [item for item in emails if item.get("trigger_type", "scheduled") != "after_conversation"]
             # A lead with even one review-required, missing, or failed step is held out.
-            if (len(emails) != step_count or any(item.get("status") != "queued" for item in emails)
-                    or any(item.get("step_number") != index for index, item in enumerate(emails, start=1))):
+            if (len(automatic_emails) != step_count
+                    or any(item.get("status") != "queued" for item in automatic_emails)):
                 counts["skipped"] += 1
                 held_for_review += 1
                 held_mapping_rows.append({"lead_id": str(lead["id"]), "status": "pending",
                                           "error_detail": "Held until every campaign email step is queued after review."})
                 continue
             try:
-                provider_lead = build_lead_payload(lead, emails)
+                provider_lead = build_lead_payload(lead, automatic_emails, settings)
             except ValueError as exc:
                 counts["skipped"] += 1
                 held_for_review += 1

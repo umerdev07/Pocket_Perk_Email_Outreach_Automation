@@ -60,7 +60,8 @@ async def edit_personalized_email(email_id: UUID, payload: EmailEdit,
     risk = await assess_personalized_email(subject, body, draft=context["draft"], lead=context["lead"],
                                            settings=settings, campaign=context.get("campaign"),
                                            step=context.get("step"))
-    status = "queued" if risk["risk_level"] == "LOW" else "pending_review"
+    manual_trigger = context.get("step", {}).get("trigger_type") == "after_conversation"
+    status = ("approved" if manual_trigger else "queued") if risk["risk_level"] == "LOW" else "pending_review"
     return await update_review_email(settings, str(email_id), old_status, {
         "subject": subject, "body": body, "risk_level": risk["risk_level"],
         "risk_reason": f"Email was edited. Content-level spam check: {risk['risk_reason']}",
@@ -80,12 +81,13 @@ async def recheck_personalized_email(email_id: UUID, settings: Settings = Depend
     risk = await assess_personalized_email(email["subject"], email["body"], draft=context["draft"],
                                            lead=context["lead"], settings=settings,
                                            campaign=context.get("campaign"), step=context.get("step"))
-    status = "queued" if risk["risk_level"] == "LOW" else "pending_review"
+    manual_trigger = context.get("step", {}).get("trigger_type") == "after_conversation"
+    status = ("approved" if manual_trigger else "queued") if risk["risk_level"] == "LOW" else "pending_review"
     updated = await update_review_email(settings, str(email_id), "pending_review", {
         "risk_level": risk["risk_level"], "risk_reason": risk["risk_reason"], "status": status,
     })
     return {**updated, "risk_level": risk["risk_level"], "risk_reason": risk["risk_reason"],
-            "auto_queued": status == "queued", "sent": False}
+            "auto_queued": status == "queued", "ready_for_manual_trigger": status == "approved", "sent": False}
 
 
 @router.post("/api/emails/{email_id}/approve")
@@ -103,9 +105,10 @@ async def approve_personalized_email(email_id: UUID, settings: Settings = Depend
         )
     content_hash = hashlib.sha256(f"{email['subject']}\0{email['body']}".encode("utf-8")).hexdigest()
     return await update_review_email(settings, str(email_id), "pending_review", {
-        # Approved means explicitly reviewed and ready for the future sending worker.
-        # It is not marked sent until Instantly confirms delivery.
-        "status": "queued", "reviewed_at": datetime.now(UTC).isoformat(),
+        # Scheduled approvals enter the Instantly sequence. Conversation steps
+        # remain approved until the user explicitly confirms the conversation.
+        "status": "approved" if context.get("step", {}).get("trigger_type") == "after_conversation" else "queued",
+        "reviewed_at": datetime.now(UTC).isoformat(),
         "approved_version_hash": content_hash,
     })
 

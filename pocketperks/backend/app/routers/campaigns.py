@@ -26,6 +26,7 @@ class CampaignCreate(BaseModel):
     end_date: date | None = None
     contexts: list[str]
     step_delays_minutes: list[int] | None = None
+    step_triggers: list[str] | None = None
 
     @model_validator(mode="after")
     def validate_contexts(self):
@@ -40,6 +41,12 @@ class CampaignCreate(BaseModel):
         if self.step_delays_minutes[0] != 0 or any(type(delay) is not int or delay < (0 if i == 0 else 15) or delay > 43200
                                                    for i, delay in enumerate(self.step_delays_minutes)):
             raise ValueError("Email 1 must have no delay; follow-up delays must be 15 minutes to 30 days")
+        if self.step_triggers is None:
+            self.step_triggers = ["scheduled"] * self.total_emails
+        if (len(self.step_triggers) != self.total_emails or self.step_triggers[0] != "scheduled"
+                or (len(self.step_triggers) > 1 and self.step_triggers[1] != "scheduled")
+                or any(trigger not in {"scheduled", "after_conversation", "close_loop"} for trigger in self.step_triggers)):
+            raise ValueError("Emails 1 and 2 must be scheduled; later steps can be timed, close-loop, or after_conversation.")
         if not self.sending_days or len(set(self.sending_days)) != len(self.sending_days) or any(day < 0 or day > 6 for day in self.sending_days):
             raise ValueError("Select at least one unique sending day (0 Sunday through 6 Saturday)")
         try:
@@ -87,8 +94,8 @@ def _resolve_local_time(value: datetime, zone: ZoneInfo) -> datetime:
 
 @router.post("")
 async def create_campaign_endpoint(payload: CampaignCreate, settings: Settings = Depends(get_settings)):
-    campaign = payload.model_dump(mode="json", exclude={"contexts", "step_delays_minutes"}) | {"status": "draft"}
-    result = await create_campaign(settings, campaign, payload.contexts, payload.step_delays_minutes)
+    campaign = payload.model_dump(mode="json", exclude={"contexts", "step_delays_minutes", "step_triggers"}) | {"status": "draft"}
+    result = await create_campaign(settings, campaign, payload.contexts, payload.step_delays_minutes, payload.step_triggers)
     return result
 
 
@@ -100,9 +107,9 @@ async def list_campaigns_endpoint(settings: Settings = Depends(get_settings)):
 @router.patch("/{campaign_id}")
 async def update_campaign_endpoint(campaign_id: UUID, payload: CampaignUpdate,
                                    settings: Settings = Depends(get_settings)):
-    campaign = payload.model_dump(mode="json", exclude={"contexts", "step_delays_minutes"})
+    campaign = payload.model_dump(mode="json", exclude={"contexts", "step_delays_minutes", "step_triggers"})
     return await update_campaign(settings, str(campaign_id), campaign, payload.contexts,
-                                 payload.step_delays_minutes)
+                                 payload.step_delays_minutes, payload.step_triggers)
 
 
 @router.get("/{campaign_id}")

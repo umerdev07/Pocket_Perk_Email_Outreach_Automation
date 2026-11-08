@@ -4,11 +4,11 @@ import { apiFetch } from "../../lib/auth";
 
 import { useEffect, useMemo, useState } from "react";
 
-type Lead = { id?: string; business_name?: string; email?: string; business_category?: string; city?: string; website?: string };
+type Lead = { id?: string; business_name?: string; first_name?: string; email?: string; business_category?: string; city?: string; website?: string };
 type PersonalizedEmail = {
-  id: string; lead_id: string; step_id: string; subject: string; body: string; status: string;
+  id: string; lead_id: string; step_id: string; subject: string; body: string; status: string; manual_send_state?: string | null;
   risk_level?: string; risk_reason?: string; created_at?: string;
-  lead?: Lead; step?: { step_number?: number; context?: string };
+  lead?: Lead; step?: { step_number?: number; context?: string; trigger_type?: "scheduled"|"after_conversation" };
 };
 type EmailPage = { items: PersonalizedEmail[]; total: number; has_more: boolean };
 type LeadEmailDetail = { lead: Lead; items: PersonalizedEmail[] };
@@ -26,6 +26,8 @@ export default function RunEmailsPanel({ apiBase, runId, processed, status, onGe
   const [savingId, setSavingId] = useState("");
   const [detailError, setDetailError] = useState("");
   const [toast, setToast] = useState("");
+  const [conversationConfirmed, setConversationConfirmed] = useState<Record<string, boolean>>({});
+  const [manualSendingId, setManualSendingId] = useState("");
 
   const leads = useMemo(() => {
     const grouped = new Map<string, { lead: Lead; count: number }>();
@@ -153,6 +155,28 @@ export default function RunEmailsPanel({ apiBase, runId, processed, status, onGe
     }
   }
 
+  async function sendConversationFollowup(email: PersonalizedEmail) {
+    if (!conversationConfirmed[email.id] || manualSendingId) return;
+    setManualSendingId(email.id);
+    setDetailError("");
+    setToast("");
+    try {
+      const response = await apiFetch(`${apiBase}/api/campaign-runs/${runId}/emails/${email.id}/send-after-conversation`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ confirm_conversation: true }),
+      });
+      const data = await response.json() as { sent?: boolean; detail?: string };
+      if (!response.ok) throw new Error(data.detail || "Could not send the conversation follow-up.");
+      setSelectedLead(current => current ? ({ ...current, items: current.items.map(item => item.id === email.id ? { ...item, status: "sent", manual_send_state: "sent" } : item) }) : current);
+      setItems(current => current.map(item => item.id === email.id ? { ...item, status: "sent", manual_send_state: "sent" } : item));
+      setToast("Conversation follow-up sent in the existing Instantly thread.");
+    } catch (cause) {
+      setDetailError(cause instanceof Error ? cause.message : "Could not send the conversation follow-up.");
+    } finally {
+      setManualSendingId("");
+    }
+  }
+
   return (
     <>
       <section className="run-emails card" aria-label="Personalized emails">
@@ -186,7 +210,7 @@ export default function RunEmailsPanel({ apiBase, runId, processed, status, onGe
           {detailBusy ? <div className="card">Loading this lead’s emails…</div> : detailError && !selectedLead ? <p role="alert" className="error">{detailError}</p> : selectedLead && <>
             <small className="eyebrow">LEAD EMAILS</small>
             <div className="personalized-lead-title"><div><h1>{selectedLead.lead.business_name || "Personalized emails"}</h1><p>{[selectedLead.lead.business_category, selectedLead.lead.city, selectedLead.lead.email].filter(Boolean).join(" · ")}</p></div><span className="badge generated">{selectedLead.items.length} email{selectedLead.items.length === 1 ? "" : "s"}</span></div>
-            <p className="personalized-notice">These are personalized drafts and have not been sent. Saving an edit sends the email to Human Approval for review.</p>
+            <p className="personalized-notice">These are personalized drafts. Saving changes rechecks the email; an after-conversation step is never sent by its timer and needs an explicit visit/conversation confirmation.</p>
             {detailError && <p role="alert" className="error">{detailError}</p>}
             {toast && <p role="status" className="personalized-saved">✓ {toast}</p>}
             {selectedLead.items.map(email => <article className="card personalized-email-card" key={email.id}>
@@ -197,6 +221,14 @@ export default function RunEmailsPanel({ apiBase, runId, processed, status, onGe
               <label className="personalized-field">Body<textarea rows={10} value={email.body} onChange={event => changeEmail(email.id, "body", event.target.value)} maxLength={20000} /></label>
               {email.risk_reason && <small className="personalized-risk">Current risk: {email.risk_level || "unknown"} · {email.risk_reason}</small>}
               <div className="personalized-save-row"><button type="button" className="action-button" disabled={!!savingId} onClick={() => void saveEmail(email)}>{savingId === email.id ? "Saving…" : "Save changes"}</button></div>
+              {email.step?.trigger_type === "after_conversation" && <div className="manual-conversation-send">
+                <p>This email is excluded from the timed Instantly sequence. Send it only after you confirm a real visit or conversation.</p>
+                {email.manual_send_state === "unknown" || email.manual_send_state === "sending" ? <p role="status">Send outcome needs reconciliation in Instantly before retrying.</p> : email.status === "sent" ? <p role="status">Sent in the existing Instantly thread.</p> : <>
+                  <label><input type="checkbox" checked={!!conversationConfirmed[email.id]} onChange={event => setConversationConfirmed(current => ({ ...current, [email.id]: event.target.checked }))} /> I confirm a visit or conversation took place with this lead.</label>
+                  <button type="button" className="action-button" disabled={!conversationConfirmed[email.id] || !!manualSendingId || email.status !== "approved"} onClick={() => void sendConversationFollowup(email)}>{manualSendingId === email.id ? "Sending…" : "Send after confirmed conversation"}</button>
+                  {email.status !== "approved" && <small>Review this email first in Human Approval.</small>}
+                </>}
+              </div>}
             </article>)}
           </>}
         </main>

@@ -21,6 +21,7 @@ REQUIRED_HEADERS = [
     "Website URL", "City", "Full address", "Email source URL",
     "Email verification result", "Verification tool", "Quality flags",
 ]
+OPTIONAL_HEADER_MAP = {"First name": "first_name", "Decision-maker first name": "first_name"}
 EMAIL_RE = re.compile(r"^[a-z0-9._%+-]+@[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+$", re.I)
 MAX_UPLOAD_BYTES = 15 * 1024 * 1024
 MAX_IMPORT_ROWS = 10_000
@@ -213,7 +214,7 @@ def _parse_xlsx(content: bytes) -> tuple[list[str] | None, list[list[object]]]:
         if sheet is None:
             return None, []
         values = []
-        for row in sheet.iter_rows(values_only=True, max_col=len(REQUIRED_HEADERS)):
+        for row in sheet.iter_rows(values_only=True, max_col=len(REQUIRED_HEADERS) + len(OPTIONAL_HEADER_MAP)):
             if len(values) >= MAX_IMPORT_ROWS + 2:
                 raise HTTPException(status_code=413, detail=f"A file can contain at most {MAX_IMPORT_ROWS:,} data rows.")
             values.append(list(row))
@@ -238,6 +239,10 @@ def _validate_and_map(headers: list[str] | None, source_rows: list[list[object]]
         row = {key: ("" if source[header_positions[header]] is None else str(source[header_positions[header]])).strip()
                if header_positions[header] < len(source) else ""
                for header, key in zip(REQUIRED_HEADERS, FIELD_KEYS)}
+        for header, key in OPTIONAL_HEADER_MAP.items():
+            if header in header_positions and not row.get(key):
+                index = header_positions[header]
+                row[key] = ("" if index >= len(source) or source[index] is None else str(source[index])).strip()
         row["email"] = row["email"].lower()
         row["domain"] = _domain(row["website"])
         row["row"] = line

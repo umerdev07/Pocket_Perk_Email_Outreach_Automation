@@ -179,7 +179,7 @@ async def load_sync_run_context(settings: Settings, run_id: str) -> dict:
         if not isinstance(sender_emails, list) or not sender_emails:
             raise HTTPException(status_code=409, detail="Select at least one Instantly sending inbox before starting this campaign.")
         campaigns = await _checked(await client.get(f"{base}/campaigns", params={
-            "select": "id,name,total_emails,start_date,end_date,start_at,end_at,timezone,daily_send_start,daily_send_end,sending_days,status,campaign_steps(id,step_number,delay_days,delay_minutes,generic_drafts(id,status))",
+            "select": "id,name,total_emails,start_date,end_date,start_at,end_at,timezone,daily_send_start,daily_send_end,sending_days,status,campaign_steps(id,step_number,delay_days,delay_minutes,trigger_type,generic_drafts(id,status))",
             "id": f"eq.{run['campaign_id']}", "limit": "1",
         }, headers=_headers(settings)), "Could not load the approved campaign for Instantly sync.")
     if not campaigns:
@@ -209,6 +209,8 @@ async def load_sync_run_context(settings: Settings, run_id: str) -> dict:
             not isinstance(step.get("draft"), dict) or step["draft"].get("status") != "approved"
             for step in steps):
         raise HTTPException(status_code=409, detail="Every campaign step needs an approved draft before Instantly sync.")
+    if steps and steps[0].get("trigger_type", "scheduled") != "scheduled":
+        raise HTTPException(status_code=409, detail="Email 1 must be an automatically scheduled step.")
     campaign["steps"] = steps
     return {"run": run, "campaign": campaign}
 
@@ -219,7 +221,7 @@ async def load_sync_lead_page(settings: Settings, run_id: str, batch_id: str,
     base = _base(settings)
     async with httpx.AsyncClient(timeout=30) as client:
         leads = await _checked(await client.get(f"{base}/leads", params={
-            "select": "id,business_name,email,phone,website,business_category,city,verification_result,quality_flags",
+            "select": "id,business_name,first_name,email,phone,website,business_category,city,verification_result,quality_flags",
             "batch_id": f"eq.{batch_id}", "order": "id.asc", "limit": str(limit), "offset": str(offset),
         }, headers=_headers(settings)), "Could not load leads for Instantly sync.")
         if not leads:
@@ -229,7 +231,7 @@ async def load_sync_lead_page(settings: Settings, run_id: str, batch_id: str,
         for page_offset in range(0, len(lead_ids), 100):
             lead_chunk = lead_ids[page_offset:page_offset + 100]
             email_rows = await _checked(await client.get(f"{base}/personalized_emails", params={
-                "select": "id,lead_id,step_id,subject,body,status,risk_level,campaign_step:campaign_steps(step_number)",
+                "select": "id,lead_id,step_id,subject,body,status,risk_level,campaign_step:campaign_steps(step_number,trigger_type)",
                 "run_id": f"eq.{run_id}", "lead_id": f"in.({','.join(lead_chunk)})",
                 "order": "lead_id.asc,step_id.asc", "limit": "1000",
             }, headers=_headers(settings)), "Could not load reviewed personalized emails for Instantly sync.")
@@ -240,6 +242,7 @@ async def load_sync_lead_page(settings: Settings, run_id: str, batch_id: str,
         if isinstance(step, list):
             step = step[0] if step else None
         email["step_number"] = step.get("step_number") if isinstance(step, dict) else None
+        email["trigger_type"] = step.get("trigger_type", "scheduled") if isinstance(step, dict) else "scheduled"
         emails_by_lead.setdefault(str(email.get("lead_id")), []).append(email)
     for lead in leads:
         lead["personalized_steps"] = emails_by_lead.get(str(lead["id"]), [])

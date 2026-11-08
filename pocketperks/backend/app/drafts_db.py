@@ -24,7 +24,7 @@ def _headers(settings: Settings, prefer: str | None = None) -> dict:
 async def load_campaign(settings: Settings, campaign_id: str) -> dict | None:
     async with httpx.AsyncClient(timeout=15) as client:
         response = await client.get(f"{_base(settings)}/campaigns", params={
-            "select": "id,name,instructions,status,campaign_steps(id,step_number,context,generic_drafts(id,subject,body,status,generation_status,generation_error,generation_started_at,generation_finished_at))",
+            "select": "id,name,instructions,status,campaign_steps(id,step_number,context,trigger_type,generic_drafts(id,subject,body,status,generation_status,generation_error,generation_started_at,generation_finished_at))",
             "id": f"eq.{campaign_id}", "limit": "1",
         }, headers=_headers(settings))
     if not response.is_success:
@@ -47,7 +47,7 @@ async def upsert_step_draft(settings: Settings, step_id: str, subject: str, body
 async def get_draft_context(settings: Settings, draft_id: str) -> dict | None:
     async with httpx.AsyncClient(timeout=15) as client:
         response = await client.get(f"{_base(settings)}/generic_drafts", params={
-            "select": "id,step_id,subject,body,status,generation_status,generation_error,generation_started_at,generation_finished_at,campaign_steps(id,campaign_id,step_number,context,campaigns(id,name,instructions,status))",
+            "select": "id,step_id,subject,body,status,generation_status,generation_error,generation_started_at,generation_finished_at,campaign_steps(id,campaign_id,step_number,context,trigger_type,campaigns(id,name,instructions,status))",
             "id": f"eq.{draft_id}", "limit": "1",
         }, headers=_headers(settings))
     if not response.is_success:

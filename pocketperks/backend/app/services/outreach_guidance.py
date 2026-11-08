@@ -17,8 +17,8 @@ _SECTOR_GUIDANCE = {
     ),
     "cafe": (
         "For a café, focus on a phone-based alternative to paper stamp cards and "
-        "rewarding regular customers. Mention a Google review journey only if the "
-        "campaign instructions explicitly confirm that it is supported for this offer."
+        "rewarding regular customers. Do not mention reviews, review journeys, "
+        "activity reporting, or pilot results unless a client has separately confirmed them."
     ),
     "barber": (
         "For a barber, focus on a simple digital loyalty card for regular clients. "

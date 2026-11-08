@@ -15,7 +15,7 @@ type Page = { batch: Batch; view: "imported" | "not_imported"; rows: Lead[] | Re
   limit: number; offset: number; has_more: boolean };
 
 const leadColumns: [string, string][] = [
-  ["business_name", "Business name"], ["business_category", "Category"], ["email", "Email"],
+  ["business_name", "Business name"], ["first_name", "First name"], ["business_category", "Category"], ["email", "Email"],
   ["phone", "Phone"], ["website", "Website"], ["domain", "Domain"], ["city", "City"],
   ["full_address", "Full address"], ["email_source_url", "Email source"],
   ["verification_result", "Verification"], ["verification_tool", "Verification tool"], ["quality_flags", "Quality flags"],
@@ -134,7 +134,7 @@ export default function BatchDetailsPanel({ apiBase, batch, onStart }: { apiBase
     </> : <>
       <p className="batch-page-count">Showing {first}–{last} of {page?.total.toLocaleString()} rows not imported</p>
       <div className="batch-table-controls"><span>Scroll to see all source columns</span><div><button type="button" aria-label="Scroll table left" onClick={() => scrollRecords(-1)}>←</button><button type="button" aria-label="Scroll table right" onClick={() => scrollRecords(1)}>→</button></div></div>
-      <div className="table batch-record-table" ref={recordsScroller} tabIndex={0} aria-label="Not imported source rows; horizontally scroll to see additional columns"><table><thead><tr><th>Source row</th><th>Result</th><th>Business name</th><th>Category</th><th>Email</th><th>Phone</th><th>Website</th><th>Domain</th><th>City</th><th>Full address</th><th>Email source</th><th>Verification</th><th>Tool</th><th>Quality flags</th></tr></thead><tbody>
+      <div className="table batch-record-table" ref={recordsScroller} tabIndex={0} aria-label="Not imported source rows; horizontally scroll to see additional columns"><table><thead><tr><th>Source row</th><th>Result</th><th>Business name</th><th>First name</th><th>Category</th><th>Email</th><th>Phone</th><th>Website</th><th>Domain</th><th>City</th><th>Full address</th><th>Email source</th><th>Verification</th><th>Tool</th><th>Quality flags</th></tr></thead><tbody>
         {(pageRows as Rejected[]).map(item => <tr key={`reject-${item.row}`}><td>{item.row}</td><td><span className={`badge ${item.status}`}>{item.status}</span></td>{leadColumns.map(([key]) => <td key={key}>{item.data?.[key] || "—"}</td>)}</tr>)}
       </tbody></table></div>
     </>}

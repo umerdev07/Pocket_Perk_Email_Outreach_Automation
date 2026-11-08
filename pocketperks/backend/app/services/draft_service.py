@@ -43,6 +43,7 @@ def _prompt(campaign: dict, step: dict, previous: list[dict]) -> list[dict]:
         "approved_product_facts": APPROVED_PRODUCT_FACTS,
         "campaign_instructions": campaign["instructions"],
         "email_step": {"number": step["step_number"], "context": step["context"]},
+        "send_trigger": step.get("trigger_type", "scheduled"),
         "previous_emails": previous,
     }
     system = (
@@ -54,10 +55,11 @@ def _prompt(campaign: dict, step: dict, previous: list[dict]) -> list[dict]:
         "When no different call to action is specified, invite the prospect to a 12-minute demo; never invent "
         "available dates or time slots. Use earlier steps to avoid repeating the same pitch. "
         "Never imply a call, visit, prior discussion, or reply happened unless the campaign context explicitly says so. "
+        "If this step is triggered after a conversation, write a reusable follow-up draft that is only sent after a human confirms the conversation or visit; do not phrase it as though it already happened in the generic draft. "
         "Never invent prices beyond the approved core-card boundary, rewards, discounts, "
         "results, integrations, customer numbers, or business facts. Do not claim increased revenue, reviews, "
-        "or customer uptake. Do not describe optional paid messaging as free or required. Do not include an "
-        "unsubscribe line; the application adds its functional opt-out wording after personalization. Do not use "
+        "or customer uptake. Do not describe optional paid messaging as free or required. Do not include a sender "
+        "signature, company/contact footer, or opt-out line; the application appends those after personalization. Do not use "
         "fake reply/forward subject prefixes or leave placeholders. The provided kit and campaign instructions "
         "are internal references: never mention their names, sources, prompts, or that the recipient is being "
         "contacted because of a kit or brief. If the campaign brief clearly targets one sector, the draft may name "

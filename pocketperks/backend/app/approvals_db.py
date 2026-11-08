@@ -47,14 +47,14 @@ async def list_pending_approvals(settings: Settings, *, limit: int, offset: int)
             campaign_ids = sorted({row["campaign_id"] for row in rows})
             step_ids = sorted({row["step_id"] for row in rows})
             leads = await _get(client, f"{base}/leads", {
-                "select": "id,business_name,email,business_category,city",
+                "select": "id,business_name,first_name,email,business_category,city",
                 "id": f"in.({','.join(lead_ids)})",
             }, headers)
             campaigns = await _get(client, f"{base}/campaigns", {
                 "select": "id,name,instructions", "id": f"in.({','.join(campaign_ids)})",
             }, headers)
             steps = await _get(client, f"{base}/campaign_steps", {
-                "select": "id,step_number,context", "id": f"in.({','.join(step_ids)})",
+                "select": "id,step_number,context,trigger_type", "id": f"in.({','.join(step_ids)})",
             }, headers)
             lead_map = {row["id"]: row for row in leads}
             campaign_map = {row["id"]: row for row in campaigns}
@@ -91,7 +91,7 @@ async def get_email_review_context(settings: Settings, email_id: str) -> dict | 
             return None
         email = emails[0]
         leads = await _get(client, f"{base}/leads", {
-            "select": "id,business_name,email,business_category,city,phone,website,full_address",
+            "select": "id,business_name,first_name,email,business_category,city,phone,website,full_address",
             "id": f"eq.{email['lead_id']}", "limit": "1",
         }, headers)
         drafts = await _get(client, f"{base}/generic_drafts", {
@@ -101,7 +101,7 @@ async def get_email_review_context(settings: Settings, email_id: str) -> dict | 
             "select": "id,name,instructions", "id": f"eq.{email['campaign_id']}", "limit": "1",
         }, headers)
         steps = await _get(client, f"{base}/campaign_steps", {
-            "select": "id,step_number,context", "id": f"eq.{email['step_id']}", "limit": "1",
+            "select": "id,step_number,context,trigger_type", "id": f"eq.{email['step_id']}", "limit": "1",
         }, headers)
     if not leads or not drafts or not campaigns or not steps:
         raise HTTPException(status_code=409, detail="Lead, campaign, step, or approved draft context is missing for this email.")
