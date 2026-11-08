@@ -75,6 +75,7 @@ def build_campaign_payload(campaign: dict[str, Any], steps: list[dict[str, Any]]
 
     ordered = sorted(steps, key=lambda item: item.get("step_number", 0))
     sequence_steps = []
+    normalized_steps: list[dict[str, Any]] = []
     for index, step in enumerate(ordered, start=1):
         if step.get("step_number") != index:
             raise ValueError("Campaign steps must be numbered consecutively from 1.")
@@ -96,22 +97,31 @@ def build_campaign_payload(campaign: dict[str, Any], steps: list[dict[str, Any]]
             raise ValueError("Email 1 must have no delay; follow-up delay must be 15 minutes to 30 days.")
         if index == 1 and delay_minutes != 0:
             raise ValueError("The first campaign email must have a zero delay.")
+        draft = step.get("draft")
+        draft_approved = isinstance(draft, dict) and draft.get("status") == "approved"
+        if step.get("status") != "approved" and step.get("draft_status") != "approved" and not draft_approved:
+            raise ValueError("Every campaign step must have an approved generic draft.")
+        normalized_steps.append({**step, "trigger_type": trigger_type,
+                                 "_validated_delay_minutes": delay_minutes})
+
+    # Instantly attaches a step's delay to the wait AFTER that email. PocketPerks
+    # stores the user's wait on the follow-up step (e.g. Email 2 = wait after
+    # Email 1), so shift each follow-up's delay one provider step earlier.
+    # Manual conversation emails are excluded from the provider sequence.
+    automatic_steps = [step for step in normalized_steps
+                       if step["trigger_type"] != "after_conversation"]
+    for index, step in enumerate(automatic_steps):
+        next_step = automatic_steps[index + 1] if index + 1 < len(automatic_steps) else None
+        delay_minutes = (next_step["_validated_delay_minutes"] if next_step is not None else 0)
         if delay_minutes % 1440 == 0:
             delay, delay_unit = delay_minutes // 1440, "days"
         elif delay_minutes % 60 == 0:
             delay, delay_unit = delay_minutes // 60, "hours"
         else:
             delay, delay_unit = delay_minutes, "minutes"
-        draft = step.get("draft")
-        draft_approved = isinstance(draft, dict) and draft.get("status") == "approved"
-        if step.get("status") != "approved" and step.get("draft_status") != "approved" and not draft_approved:
-            raise ValueError("Every campaign step must have an approved generic draft.")
-        if trigger_type == "after_conversation":
-            continue
         sequence_steps.append({
             "type": "email",
-            # The campaign's saved step delay is authoritative. Instantly then
-            # sends each lead only inside its configured daily sending window.
+            # The delay on this step controls the wait until the next step.
             "delay": delay,
             "delay_unit": delay_unit,
             "variants": [{
@@ -164,14 +174,19 @@ def build_lead_payload(lead: dict[str, Any], personalized_steps: list[dict[str, 
         variables[f"pp_email_{index}_subject"] = subject.strip()
         variables[f"pp_email_{index}_body"] = append_outreach_footer(body.strip(), settings or get_settings())
 
-    business_name = lead.get("business_name") or ""
+    business_name = str(lead.get("business_name") or "").strip()
+    custom_variables = {**variables}
+    if business_name:
+        # Keep a plainly named copy available in Instantly's custom columns as
+        # well as its standard Company field, so operators can inspect it easily.
+        custom_variables["pp_business_name"] = business_name
     return {
         "email": email.strip().lower(),
-        "company_name": str(business_name),
+        "company_name": business_name,
         "first_name": str(lead.get("first_name") or ""),
         "website": str(lead.get("website") or ""),
         "phone": str(lead.get("phone") or ""),
-        "custom_variables": variables,
+        "custom_variables": custom_variables,
     }
 
 

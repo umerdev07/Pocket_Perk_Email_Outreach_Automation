@@ -348,3 +348,8 @@ This log records completed work and verification reported in this project chat. 
 - Added a canonical configurable footer (`OUTREACH_SENDER_NAME`, `OUTREACH_COMPANY_NAME`, `OUTREACH_WEBSITE`, optional `OUTREACH_PHONE`). The footer uses VenturesSky Ltd, omits an unset phone, and says “reply 'no thanks'”; reply parsing recognizes that phrase and records suppression.
 - Tightened the product fact guidance to exclude reviews, activity reporting, and pilot results until client-confirmed. Phone scripts, walk-in/social scripts, discovery questions, demo agenda and CRM pipeline remain outside email workflow scope.
 - Apply Supabase migrations `032_email_workflow_profile.sql` and `033_manual_conversation_email.sql` in order, then rebuild/restart the backend and deploy the frontend. Python syntax compilation and frontend TypeScript typecheck passed; automated tests were not run. No live email was sent and nothing was pushed.
+
+### Instantly sequence delay and company-name mapping correction (2026-11-08)
+- Shifted each saved follow-up wait onto the preceding Instantly sequence step, matching Instantly's rule that a step's wait controls the next step. A saved 3-day Email 2 wait is now emitted as a 3-day wait after Email 1, preventing the follow-up from becoming immediately eligible.
+- Kept the standard Instantly `company_name` field and added a separate `pp_business_name` custom field so operators can identify imported business names in provider lead data without misusing `first_name`.
+- Existing provider campaigns and already-synced lead records are not modified. Recreate a controlled test campaign after backend rebuild/restart to verify the delay and company display. No migration or frontend deploy is needed; tests/live sends/push were not performed.
