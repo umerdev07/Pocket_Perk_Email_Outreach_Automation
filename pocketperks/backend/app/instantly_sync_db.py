@@ -179,7 +179,7 @@ async def load_sync_run_context(settings: Settings, run_id: str) -> dict:
         if not isinstance(sender_emails, list) or not sender_emails:
             raise HTTPException(status_code=409, detail="Select at least one Instantly sending inbox before starting this campaign.")
         campaigns = await _checked(await client.get(f"{base}/campaigns", params={
-            "select": "id,name,total_emails,start_date,end_date,start_at,end_at,timezone,status,campaign_steps(id,step_number,delay_days,generic_drafts(id,status))",
+            "select": "id,name,total_emails,start_date,end_date,start_at,end_at,timezone,daily_send_start,daily_send_end,sending_days,status,campaign_steps(id,step_number,delay_days,delay_minutes,generic_drafts(id,status))",
             "id": f"eq.{run['campaign_id']}", "limit": "1",
         }, headers=_headers(settings)), "Could not load the approved campaign for Instantly sync.")
     if not campaigns:

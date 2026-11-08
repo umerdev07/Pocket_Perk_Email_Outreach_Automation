@@ -18,10 +18,14 @@ class CampaignCreate(BaseModel):
     start_at: datetime | None = None
     end_at: datetime | None = None
     timezone: str = "Europe/London"
+    daily_send_start: time | None = None
+    daily_send_end: time | None = None
+    sending_days: list[int] = Field(default_factory=lambda: [1, 2, 3, 4, 5])
     # Backward-compatible date-only input for existing API clients.
     start_date: date | None = None
     end_date: date | None = None
     contexts: list[str]
+    step_delays_minutes: list[int] | None = None
 
     @model_validator(mode="after")
     def validate_contexts(self):
@@ -29,6 +33,15 @@ class CampaignCreate(BaseModel):
             raise ValueError("contexts must contain one item per email step")
         if any(not context.strip() for context in self.contexts):
             raise ValueError("each context must contain non-empty text")
+        if self.step_delays_minutes is None:
+            self.step_delays_minutes = [0, *([4320] * (self.total_emails - 1))]
+        if len(self.step_delays_minutes) != self.total_emails:
+            raise ValueError("step_delays_minutes must contain one delay per email step")
+        if self.step_delays_minutes[0] != 0 or any(type(delay) is not int or delay < (0 if i == 0 else 15) or delay > 43200
+                                                   for i, delay in enumerate(self.step_delays_minutes)):
+            raise ValueError("Email 1 must have no delay; follow-up delays must be 15 minutes to 30 days")
+        if not self.sending_days or len(set(self.sending_days)) != len(self.sending_days) or any(day < 0 or day > 6 for day in self.sending_days):
+            raise ValueError("Select at least one unique sending day (0 Sunday through 6 Saturday)")
         try:
             campaign_zone = ZoneInfo(self.timezone)
         except (TypeError, ValueError, KeyError) as exc:
@@ -47,6 +60,12 @@ class CampaignCreate(BaseModel):
             raise ValueError("Campaign end time must be after its start time.")
         self.start_date = self.start_at.astimezone(campaign_zone).date()
         self.end_date = self.end_at.astimezone(campaign_zone).date()
+        if self.daily_send_start is None:
+            self.daily_send_start = time(9, 0)
+        if self.daily_send_end is None:
+            self.daily_send_end = time(17, 0)
+        if self.daily_send_end <= self.daily_send_start:
+            raise ValueError("Daily sending end time must be later than its start time")
         return self
 
 
@@ -68,8 +87,8 @@ def _resolve_local_time(value: datetime, zone: ZoneInfo) -> datetime:
 
 @router.post("")
 async def create_campaign_endpoint(payload: CampaignCreate, settings: Settings = Depends(get_settings)):
-    campaign = payload.model_dump(mode="json", exclude={"contexts"}) | {"status": "draft"}
-    result = await create_campaign(settings, campaign, payload.contexts)
+    campaign = payload.model_dump(mode="json", exclude={"contexts", "step_delays_minutes"}) | {"status": "draft"}
+    result = await create_campaign(settings, campaign, payload.contexts, payload.step_delays_minutes)
     return result
 
 
@@ -81,8 +100,9 @@ async def list_campaigns_endpoint(settings: Settings = Depends(get_settings)):
 @router.patch("/{campaign_id}")
 async def update_campaign_endpoint(campaign_id: UUID, payload: CampaignUpdate,
                                    settings: Settings = Depends(get_settings)):
-    campaign = payload.model_dump(mode="json", exclude={"contexts"})
-    return await update_campaign(settings, str(campaign_id), campaign, payload.contexts)
+    campaign = payload.model_dump(mode="json", exclude={"contexts", "step_delays_minutes"})
+    return await update_campaign(settings, str(campaign_id), campaign, payload.contexts,
+                                 payload.step_delays_minutes)
 
 
 @router.get("/{campaign_id}")

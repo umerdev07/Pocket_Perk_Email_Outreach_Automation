@@ -32,7 +32,7 @@ async def start_campaign_run(settings: Settings, campaign_id: str, batch_id: str
     headers = _headers(settings)
     async with httpx.AsyncClient(timeout=15) as client:
         campaign_response = await client.get(f"{base}/campaigns", params={
-            "select": "id,status,start_at,end_at,timezone,campaign_steps(step_number,delay_days)",
+            "select": "id,status,start_at,end_at,timezone,daily_send_start,daily_send_end,sending_days,campaign_steps(step_number,delay_days,delay_minutes)",
             "id": f"eq.{campaign_id}", "limit": "1",
         }, headers=headers)
         if not campaign_response.is_success:
@@ -100,13 +100,23 @@ def _campaign_window_estimate(campaign: dict, total_leads: int,
             return None
         zone = ZoneInfo(str(campaign.get("timezone") or "UTC"))
         local_start, local_end = start.astimezone(zone), end.astimezone(zone)
-        start_minute = local_start.hour * 60 + local_start.minute
-        end_minute = local_end.hour * 60 + local_end.minute
-        window_minutes = end_minute - start_minute if end_minute > start_minute else 1440
+        daily_start = str(campaign.get("daily_send_start") or local_start.strftime("%H:%M"))[:5]
+        daily_end = str(campaign.get("daily_send_end") or local_end.strftime("%H:%M"))[:5]
+        start_hour, start_min = (int(part) for part in daily_start.split(":"))
+        end_hour, end_min = (int(part) for part in daily_end.split(":"))
+        start_minute = start_hour * 60 + start_min
+        end_minute = end_hour * 60 + end_min
+        window_minutes = end_minute - start_minute
+        if window_minutes <= 0:
+            return None
+        configured_days = campaign.get("sending_days") or [1, 2, 3, 4, 5]
+        allowed_weekdays = {(int(day) - 1) % 7 for day in configured_days}
         steps = sorted(campaign.get("campaign_steps") or [], key=lambda row: row.get("step_number", 0))
         if not steps:
             return None
-        followup_days = sum(max(0, int(step.get("delay_days") or 0)) for step in steps[1:])
+        followup_days = sum(math.ceil(max(0, int(step.get("delay_minutes") if step.get("delay_minutes") is not None
+                                                   else (step.get("delay_days") or 0) * 1440)) / 1440)
+                            for step in steps[1:])
     except (KeyError, TypeError, ValueError, OverflowError):
         return None
 
@@ -127,7 +137,7 @@ def _campaign_window_estimate(campaign: dict, total_leads: int,
     total_messages = total_leads * len(steps)
     sending_windows = max(1, math.ceil(total_messages / capacity_per_window))
     # Instantly may keep provider-side work queued beyond a theoretical capacity
-    # estimate. Reserve one additional weekday window so the configured stop date
+    # estimate. Reserve one additional allowed sending window so the stop date
     # does not coincide with the last expected send window.
     required_sending_windows = sending_windows + 1
     required_days = required_sending_windows + followup_days
@@ -135,7 +145,7 @@ def _campaign_window_estimate(campaign: dict, total_leads: int,
     while True:
         calendar_days = (candidate_end.date() - local_start.date()).days + 1
         sending_days = sum(
-            (local_start.date() + timedelta(days=offset)).weekday() < 5
+            (local_start.date() + timedelta(days=offset)).weekday() in allowed_weekdays
             for offset in range(max(0, calendar_days))
         )
         if calendar_days >= required_days and sending_days >= required_sending_windows:
@@ -148,7 +158,7 @@ def _campaign_window_estimate(campaign: dict, total_leads: int,
     recommended_end_at = candidate_end.isoformat() if candidate_end > local_end else None
     available_calendar_days = (local_end.date() - local_start.date()).days + 1
     available_sending_days = sum(
-        (local_start.date() + timedelta(days=offset)).weekday() < 5
+        (local_start.date() + timedelta(days=offset)).weekday() in allowed_weekdays
         for offset in range(max(0, available_calendar_days))
     )
     return {

@@ -53,17 +53,22 @@ def build_campaign_payload(campaign: dict[str, Any], steps: list[dict[str, Any]]
         raise ValueError("Campaign start and end dates are required for Instantly sync.")
     if end < start:
         raise ValueError("Campaign end date cannot be before its start date.")
-    if start_local is not None and end_local is not None:
-        daily_start = start_local.strftime("%H:%M")
-        daily_end = end_local.strftime("%H:%M")
-        # Instantly's daily window cannot represent an overnight interval.
-        # Keep that provider window open for the calendar day; PocketPerks'
-        # lifecycle worker still activates at start_at and pauses at end_at.
-        if daily_end <= daily_start:
-            daily_start, daily_end = "00:00", "23:59"
-    else:
-        # Legacy date-only campaign records retain their previous office hours.
-        daily_start, daily_end = "09:00", "17:00"
+    has_explicit_daily_window = bool(campaign.get("daily_send_start") and campaign.get("daily_send_end"))
+    daily_start = str(campaign.get("daily_send_start") or
+                      (start_local.strftime("%H:%M") if start_local else "09:00"))[:5]
+    daily_end = str(campaign.get("daily_send_end") or
+                    (end_local.strftime("%H:%M") if end_local else "17:00"))[:5]
+    if daily_end <= daily_start:
+        if has_explicit_daily_window:
+            raise ValueError("Daily sending end time must be later than its start time.")
+        # Preserve the old full-day provider schedule for legacy overnight
+        # campaigns without the new explicit daily-window columns.
+        daily_start, daily_end = "00:00", "23:59"
+    configured_days = campaign.get("sending_days")
+    if not isinstance(configured_days, list) or not configured_days:
+        configured_days = [1, 2, 3, 4, 5]
+    if any(type(day) is not int or day < 0 or day > 6 for day in configured_days):
+        raise ValueError("Sending days must use Sunday=0 through Saturday=6.")
     if not isinstance(steps, list) or not steps:
         raise ValueError("At least one campaign step is required.")
 
@@ -72,11 +77,25 @@ def build_campaign_payload(campaign: dict[str, Any], steps: list[dict[str, Any]]
     for index, step in enumerate(ordered, start=1):
         if step.get("step_number") != index:
             raise ValueError("Campaign steps must be numbered consecutively from 1.")
-        delay_days = step.get("delay_days")
-        if type(delay_days) is not int or delay_days < 0:
-            raise ValueError("Every campaign step needs a non-negative delay in days.")
-        if index == 1 and delay_days != 0:
-            raise ValueError("The first campaign email must have a zero-day delay.")
+        delay_minutes = step.get("delay_minutes")
+        if delay_minutes is None:
+            legacy_days = step.get("delay_days")
+            if legacy_days is None:
+                delay_minutes = 0 if index == 1 else 240
+            else:
+                if type(legacy_days) is not int or legacy_days < 0:
+                    raise ValueError("Every campaign step needs a non-negative delay.")
+                delay_minutes = legacy_days * 1440
+        if type(delay_minutes) is not int or delay_minutes < (0 if index == 1 else 15) or delay_minutes > 43200:
+            raise ValueError("Email 1 must have no delay; follow-up delay must be 15 minutes to 30 days.")
+        if index == 1 and delay_minutes != 0:
+            raise ValueError("The first campaign email must have a zero delay.")
+        if delay_minutes % 1440 == 0:
+            delay, delay_unit = delay_minutes // 1440, "days"
+        elif delay_minutes % 60 == 0:
+            delay, delay_unit = delay_minutes // 60, "hours"
+        else:
+            delay, delay_unit = delay_minutes, "minutes"
         draft = step.get("draft")
         draft_approved = isinstance(draft, dict) and draft.get("status") == "approved"
         if step.get("status") != "approved" and step.get("draft_status") != "approved" and not draft_approved:
@@ -85,8 +104,8 @@ def build_campaign_payload(campaign: dict[str, Any], steps: list[dict[str, Any]]
             "type": "email",
             # The campaign's saved step delay is authoritative. Instantly then
             # sends each lead only inside its configured daily sending window.
-            "delay": delay_days,
-            "delay_unit": "days",
+            "delay": delay,
+            "delay_unit": delay_unit,
             "variants": [{
                 "subject": "{{pp_email_" + str(index) + "_subject}}",
                 "body": "{{pp_email_" + str(index) + "_body}}",
@@ -105,8 +124,7 @@ def build_campaign_payload(campaign: dict[str, Any], steps: list[dict[str, Any]]
             "schedules": [{
                 "name": "PocketPerks UK weekdays",
                 "timing": {"from": daily_start, "to": daily_end},
-                "days": {"0": False, "1": True, "2": True, "3": True,
-                         "4": True, "5": True, "6": False},
+                "days": {str(day): day in configured_days for day in range(7)},
                 "timezone": str(campaign.get("timezone") or LEGACY_SCHEDULE_TIMEZONE),
             }],
         },

@@ -16,12 +16,13 @@ def _base(settings: Settings) -> str:
     return f"{settings.supabase_url.rstrip('/')}/rest/v1"
 
 
-async def create_campaign(settings: Settings, campaign: dict, contexts: list[str]) -> dict:
+async def create_campaign(settings: Settings, campaign: dict, contexts: list[str], delays_minutes: list[int]) -> dict:
     async with httpx.AsyncClient(timeout=20) as client:
         response = await client.post(
-            f"{_base(settings)}/rpc/create_campaign_with_steps",
+            f"{_base(settings)}/rpc/create_campaign_with_schedule",
             headers=_headers(settings),
-            json={"campaign_data": campaign, "step_contexts": contexts},
+            json={"campaign_data": campaign, "step_contexts": contexts,
+                  "step_delays_minutes": delays_minutes},
         )
     if not response.is_success:
         raise HTTPException(status_code=503, detail="Could not save the campaign.")
@@ -32,7 +33,7 @@ async def create_campaign(settings: Settings, campaign: dict, contexts: list[str
 async def list_campaigns(settings: Settings) -> list[dict]:
     async with httpx.AsyncClient(timeout=15) as client:
         response = await client.get(f"{_base(settings)}/campaigns", params={
-            "select": "id,name,total_emails,start_date,end_date,start_at,end_at,timezone,status,created_at,campaign_steps(step_number,delay_days),campaign_runs(id)", "order": "created_at.desc",
+            "select": "id,name,total_emails,start_date,end_date,start_at,end_at,timezone,daily_send_start,daily_send_end,sending_days,status,created_at,campaign_steps(step_number,delay_days,delay_minutes),campaign_runs(id)", "order": "created_at.desc",
         }, headers=_headers(settings))
     if not response.is_success:
         raise HTTPException(status_code=503, detail="Could not load campaigns.")
@@ -45,13 +46,13 @@ async def list_campaigns(settings: Settings) -> list[dict]:
 
 
 async def update_campaign(settings: Settings, campaign_id: str, campaign: dict,
-                          contexts: list[str]) -> dict:
+                          contexts: list[str], delays_minutes: list[int]) -> dict:
     async with httpx.AsyncClient(timeout=25) as client:
         response = await client.post(
-            f"{_base(settings)}/rpc/update_campaign_with_steps",
+            f"{_base(settings)}/rpc/update_campaign_with_schedule",
             headers=_headers(settings),
             json={"target_campaign_id": campaign_id, "campaign_data": campaign,
-                  "step_contexts": contexts},
+                  "step_contexts": contexts, "step_delays_minutes": delays_minutes},
         )
     if not response.is_success:
         raise HTTPException(status_code=503, detail="Could not save campaign changes.")
@@ -73,7 +74,7 @@ async def update_campaign(settings: Settings, campaign_id: str, campaign: dict,
 async def get_campaign(settings: Settings, campaign_id: str) -> dict | None:
     async with httpx.AsyncClient(timeout=15) as client:
         response = await client.get(f"{_base(settings)}/campaigns", params={
-            "select": "id,name,total_emails,start_date,end_date,start_at,end_at,timezone,instructions,status,created_at,campaign_steps(id,step_number,context,delay_days,generic_drafts(id,subject,body,status,approved_at,generation_status,generation_error,generation_started_at,generation_finished_at))",
+            "select": "id,name,total_emails,start_date,end_date,start_at,end_at,timezone,daily_send_start,daily_send_end,sending_days,instructions,status,created_at,campaign_steps(id,step_number,context,delay_days,delay_minutes,generic_drafts(id,subject,body,status,approved_at,generation_status,generation_error,generation_started_at,generation_finished_at))",
             "id": f"eq.{campaign_id}", "limit": "1",
         }, headers=_headers(settings))
     if not response.is_success:

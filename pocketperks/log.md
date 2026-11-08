@@ -322,3 +322,11 @@ This log records completed work and verification reported in this project chat. 
 - Instantly sync, scheduled activation, and automatic pause now use the per-run end time. The start dialog explains the estimated extension; the run result displays the exact previous and adjusted deadlines in the campaign timezone.
 - Sender selection, daily sending hours, sequence copy, and saved step delays are unchanged. This extends the allowed end date; it does not guarantee delivery or override Instantly's own account limits.
 - Added migration `030_campaign_run_schedule_end.sql`. Apply it in Supabase before building/restarting the backend. No automated tests or frontend build were run in this change; run local checks and a small controlled test before deployment.
+
+
+## Campaign setup — per-step delay and daily send schedule (2026-11-08)
+- Added separate campaign activation start/end timestamps and a daily sending window with selectable Sunday–Saturday send days (weekdays remain the default). The UI labels all schedule controls in the detected local IANA timezone.
+- Added an editable wait per follow-up step in minutes, hours, or days. Email 1 is fixed at zero delay; follow-up waits are validated from 15 minutes through 30 days and are sent to Instantly using the corresponding delay unit. Default follow-up wait is four hours.
+- Campaign create/edit now saves these settings atomically with the campaign and steps through new restricted service-role RPCs. Existing campaign and step delay data is migrated without altering active runs; legacy delay_days remains available for older readers.
+- Updated Instantly sync and workload preflight to use the saved daily hours and selected days. Step deletion keeps the new delay field and first-step timing consistent. No existing campaigns are retroactively changed by this feature.
+- Added migration `031_campaign_sending_schedule_and_step_delays.sql`; apply it in Supabase before deploying/restarting backend and frontend. Automated tests/builds were not run. Git push/deployment not performed.
