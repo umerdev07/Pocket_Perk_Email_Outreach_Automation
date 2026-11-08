@@ -358,3 +358,8 @@ This log records completed work and verification reported in this project chat. 
 - Root cause: deleting an Engage campaign manually does not update PocketPerks' local `instantly_campaign_mappings` row, while the batch-cleanup RPC correctly blocks mappings still marked `launching`, `scheduled`, or `active`.
 - Added campaign-by-ID lookup through Instantly API v2 (`campaigns:read`) and reconcile linked active/scheduled mappings before cleanup preview and deletion. A provider 404 marks the local mapping completed; provider draft, paused, active, and completed statuses are reflected locally. Unknown status or API/auth/network failure fails closed.
 - Preview refreshes after reconciliation; the SQL deletion guard remains authoritative. No migration or frontend change is required. Existing Book1 import becomes eligible for cleanup once latest backend is running and provider confirms its campaign is absent/paused/completed. No tests run, no live email sent, and no Git push/deployment performed.
+
+### Duplicate campaign-run protection (2026-11-08)
+- The dashboard showed 16 queued email records because the same 4-lead, 2-step campaign/batch pair had been started twice; each run created 8 email records.
+- Backend now rejects any second start for an already-used campaign/batch pair with HTTP 409. The frontend locks the same pair after a successful start and displays a duplicate warning; after refresh, the backend check still blocks it.
+- Different batches remain startable with the same approved campaign. No migration is needed; the existing partial unique index continues to handle simultaneous start requests. No automated tests run, no live sends, and no push/deployment performed.

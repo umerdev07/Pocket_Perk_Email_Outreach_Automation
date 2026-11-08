@@ -72,6 +72,7 @@ def test_valid_start_returns_created_run_summary():
     run_id = expected["run_id"]
     fake([FakeResponse([{"id": str(campaign_id), "status": "approved"}]),
           FakeResponse([{"id": str(batch_id), "imported_count": 120}]),
+          FakeResponse([]),
           FakeResponse([{"id": run_id, "status": "running", "total_leads": 120}])])
     with patch("app.campaign_runs_db.httpx.AsyncClient", FakeSupabase):
         created = asyncio.run(start_campaign_run(db_settings(), str(campaign_id), str(batch_id)))

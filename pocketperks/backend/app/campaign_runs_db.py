@@ -53,6 +53,25 @@ async def start_campaign_run(settings: Settings, campaign_id: str, batch_id: str
             raise HTTPException(status_code=404, detail="Lead batch not found.")
         total_leads = int(batches[0]["imported_count"])
 
+        # A completed run must not be silently re-created for the same
+        # campaign/batch pair: that would make a second Instantly campaign and
+        # duplicate personalized emails. Keep failed runs locked too; the
+        # recovery worker reconciles their existing provider mapping safely.
+        existing_runs_response = await client.get(f"{base}/campaign_runs", params={
+            "select": "id,status", "campaign_id": f"eq.{campaign_id}",
+            "batch_id": f"eq.{batch_id}", "order": "created_at.desc", "limit": "1",
+        }, headers=headers)
+        if not existing_runs_response.is_success:
+            raise HTTPException(status_code=503, detail="Could not check whether this campaign already used the selected lead batch.")
+        existing_runs = existing_runs_response.json()
+        if not isinstance(existing_runs, list):
+            raise HTTPException(status_code=503, detail="Could not check whether this campaign already used the selected lead batch.")
+        if existing_runs:
+            raise HTTPException(
+                status_code=409,
+                detail="This campaign has already been started with this lead batch. Use its existing run, or import a new batch to start another run.",
+            )
+
         schedule_end_at = None
         schedule_adjustment = None
         if sender_accounts:

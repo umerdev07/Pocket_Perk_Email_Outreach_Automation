@@ -542,3 +542,8 @@ Koi fake business data repo mein nahi. Testing ke liye user apni asli (ya sample
 - Provider-deleted campaigns are reconciled locally as completed; provider draft, paused, active, and completed states are mapped to their local lifecycle states. Unknown statuses or provider/API errors fail closed and leave cleanup blocked.
 - The final database cleanup RPC remains authoritative and still blocks deletion while a campaign can send. Cleanup preview refreshes after reconciliation so the UI receives current local state.
 - No migration or frontend change is required. This reconciliation only runs for a batch with a linked active/scheduled provider mapping; campaign sending, scheduling, and lead sync behavior are unchanged.
+
+### Duplicate campaign-run protection (2026-11-08)
+- A campaign and imported batch pair can start only once. The backend checks prior runs and returns HTTP 409 with a clear explanation instead of generating another set of drafts or another Instantly campaign.
+- The Start Campaign button locks that same pair after a successful start for the current page session. After refresh/reopen, the backend remains authoritative and blocks the repeat.
+- A different imported batch can still run with the approved campaign. No migration is required; the existing unique active-run index continues to protect simultaneous requests.
