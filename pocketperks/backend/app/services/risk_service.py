@@ -8,6 +8,7 @@ import re
 
 from app.config import Settings
 from app.integrations.claude_client import chat_completion_json
+from app.services.outreach_copy_guard import has_internal_source_reference
 
 LEVELS = {"LOW": 0, "MEDIUM": 1, "HIGH": 2}
 PLACEHOLDER_RE = re.compile(r"\{\{\s*[^}]+\}\}|\[[^\]]+\]")
@@ -31,6 +32,9 @@ def _rule_assessment(subject: str, body: str, draft: dict, lead: dict,
         return "HIGH", ["Subject or body is empty or still contains a placeholder."]
     if not (lead.get("email") or "").strip():
         return "HIGH", ["Recipient email is missing."]
+
+    if has_internal_source_reference(subject, body):
+        return "HIGH", ["Message mentions internal campaign source material and needs correction before sending."]
 
     text = f"{subject}\n{body}"
     points = 0

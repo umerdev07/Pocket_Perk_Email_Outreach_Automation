@@ -521,3 +521,10 @@ Koi fake business data repo mein nahi. Testing ke liye user apni asli (ya sample
 - Client decisions needed for safe feature completion: provide sender postal/footer details and confirm the verifier's accepted valid-result labels and blocking quality flags before enabling strict eligibility. Reviewer account invitation/permission check remains deferred unless the client needs that role.
 - External operating dependency: use a client-funded Claude API key/model with an agreed budget; configure both as backend secrets/environment variables. The Claude integration supports model selection through configuration.
 - Deployment is a separate later step, as the client will provide the production server. Before go-live, also verify end-time pause with the worker online, configure monitoring/backups/secrets on that server, and keep the backend reachable without a temporary tunnel. Stage 9 feature sign-off remains open.
+
+## Stage 4.3 — Customer-facing copy guardrails (2026-11-08)
+- Added a shared backend validator to generic draft generation, draft regeneration, and per-lead personalization. It detects internal kit/source/prompt references and sector wording that conflicts with a neutral brief or the verified lead category.
+- Invalid generated copy receives one Claude correction attempt. If it still fails, generation is stopped with a safe error; personalized copy is not saved as queued. The existing human approval, suppression, scheduling, and Instantly flow are unchanged.
+- Personalization now explicitly adapts generic sector language to the imported business category; missing or ambiguous categories stay sector-neutral. Added restaurant framing based only on general approved product facts.
+- Added a defense-in-depth high-risk flag for internal-source wording in the existing content risk scan, including manually edited copy.
+- Backend syntax compilation passed. No database migration or frontend change is required. Automated tests, deployment, and push have not yet been run/performed.

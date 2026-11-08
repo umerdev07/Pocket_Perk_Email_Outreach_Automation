@@ -334,3 +334,9 @@ This log records completed work and verification reported in this project chat. 
 
 ## Netlify frontend build fix (2026-11-08)
 - Restored the Batch and BatchReport TypeScript declarations removed while updating the campaign pacing estimate. This resolves the Netlify TypeScript errors and restores lead row type inference in the import report.
+
+## Stage 4.3 — Customer-facing copy guardrails (2026-11-08)
+- Added shared checks across draft generation, regeneration, and personalization to prevent internal Harrogate kit/source references and mismatched sector wording from reaching the send queue.
+- The generator gets one correction attempt; copy that still fails is blocked with a safe error. Missing/ambiguous lead categories stay neutral; verified café, barber, restaurant, sandwich-shop, or pub categories guide wording without adding unsupported product claims.
+- Added the same internal-source check to the existing spam/content risk assessment. Approval, suppression, queue, and Instantly behavior otherwise remain unchanged.
+- `python -m compileall -q pocketperks/backend/app/services` passed. No migration or frontend build is needed. Tests were not run.

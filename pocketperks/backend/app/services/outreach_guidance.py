@@ -25,6 +25,11 @@ _SECTOR_GUIDANCE = {
         "Do not assume visit frequency, make birthday or win-back messaging claims, "
         "or promise that a client will return by a particular date."
     ),
+    "restaurant": (
+        "For a restaurant, describe a phone-based alternative to paper loyalty cards "
+        "for its customers. Do not assume the restaurant's service style, visit frequency, "
+        "or reward, and do not promise a particular business outcome."
+    ),
     "general": (
         "Use the general digital-loyalty-card description. Do not force a café, "
         "sandwich-shop, or barber-specific problem onto another business."
@@ -41,6 +46,8 @@ def sector_guidance_for(category: object) -> str:
         sector = "barber"
     elif any(term in normalized for term in ("cafe", "café", "coffee shop", "coffeehouse")):
         sector = "cafe"
+    elif any(term in normalized for term in ("restaurant", "bistro", "dining")):
+        sector = "restaurant"
     else:
         sector = "general"
     return _SECTOR_GUIDANCE[sector]
