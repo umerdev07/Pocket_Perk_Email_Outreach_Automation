@@ -27,11 +27,14 @@ def outreach_footer(settings) -> str:
 
 
 def append_outreach_footer(body: str, settings) -> str:
-    """Replace the previous app-owned STOP/sign-off footer, then append the canonical one."""
+    """Normalize app-owned legacy footers and append the canonical footer once."""
     clean = str(body or "").rstrip()
-    clean = _OLD_SYSTEM_OPT_OUT.sub("", clean).rstrip()
-    clean = _OLD_SYSTEM_SIGNATURE.sub("", clean).rstrip()
     footer = outreach_footer(settings)
+    # Personalization stores the canonical footer already. Instantly payload
+    # construction and manual thread sends both pass through this helper again;
+    # preserve an exact existing footer instead of adding a second copy.
     if clean.endswith(footer):
         return clean
+    clean = _OLD_SYSTEM_OPT_OUT.sub("", clean).rstrip()
+    clean = _OLD_SYSTEM_SIGNATURE.sub("", clean).rstrip()
     return f"{clean}\n\n{footer}" if clean else footer
