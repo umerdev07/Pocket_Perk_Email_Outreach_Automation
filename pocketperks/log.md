@@ -330,3 +330,7 @@ This log records completed work and verification reported in this project chat. 
 - Campaign create/edit now saves these settings atomically with the campaign and steps through new restricted service-role RPCs. Existing campaign and step delay data is migrated without altering active runs; legacy delay_days remains available for older readers.
 - Updated Instantly sync and workload preflight to use the saved daily hours and selected days. Step deletion keeps the new delay field and first-step timing consistent. No existing campaigns are retroactively changed by this feature.
 - Added migration `031_campaign_sending_schedule_and_step_delays.sql`; apply it in Supabase before deploying/restarting backend and frontend. Automated tests/builds were not run. Git push/deployment not performed.
+
+
+## Netlify frontend build fix (2026-11-08)
+- Restored the Batch and BatchReport TypeScript declarations removed while updating the campaign pacing estimate. This resolves the Netlify TypeScript errors and restores lead row type inference in the import report.
