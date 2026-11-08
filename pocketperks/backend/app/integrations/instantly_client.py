@@ -145,6 +145,47 @@ async def list_sending_accounts(settings: Settings | None = None) -> list[dict[s
             seen_cursors.add(cursor)
 
 
+async def get_campaign(campaign_id: str, settings: Settings | None = None) -> dict[str, Any] | None:
+    """Read one campaign for local/provider lifecycle reconciliation.
+
+    A provider 404 is an affirmative missing-campaign result. Authentication,
+    transport, and other provider errors are raised so callers fail closed.
+    """
+    config = settings or get_settings()
+    try:
+        UUID(campaign_id)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("A valid Instantly campaign ID is required.") from exc
+    headers = _write_headers(config)
+    try:
+        async with httpx.AsyncClient(timeout=25.0) as session:
+            response = await session.get(f"{CAMPAIGNS_URL}/{campaign_id}", headers=headers)
+    except httpx.TimeoutException as exc:
+        raise InstantlyTimeoutError("Instantly campaign status check timed out.") from exc
+    except httpx.HTTPError as exc:
+        raise InstantlyRequestError("Could not communicate with Instantly to check campaign status.") from exc
+    if response.status_code == 404:
+        return None
+    if response.status_code in (401, 403):
+        raise AuthenticationError("Instantly rejected the API key or its campaigns:read permission.")
+    if response.status_code == 402:
+        raise PlanAccessError("The Instantly workspace plan does not allow reading campaigns.")
+    if response.status_code == 429:
+        raise RateLimitedError("Instantly rate limited the campaign status check; retry later.")
+    if not response.is_success:
+        raise InstantlyRequestError(f"Instantly returned HTTP {response.status_code} for campaign status.")
+    try:
+        result = response.json()
+    except (ValueError, TypeError) as exc:
+        raise BadResponseError("Instantly returned invalid JSON for campaign status.") from exc
+    if not isinstance(result, dict) or result.get("id") != campaign_id:
+        raise BadResponseError("Instantly returned unexpected campaign details.")
+    status = result.get("status")
+    if not isinstance(status, (int, str)) or isinstance(status, bool):
+        raise BadResponseError("Instantly returned an invalid campaign status.")
+    return {"id": campaign_id, "status": status}
+
+
 async def list_received_emails(*, settings: Settings | None = None, limit: int = 100,
                                cursor: str | None = None,
                                min_timestamp_created: str | None = None) -> dict[str, Any]:

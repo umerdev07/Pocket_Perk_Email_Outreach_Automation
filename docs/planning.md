@@ -536,3 +536,9 @@ Koi fake business data repo mein nahi. Testing ke liye user apni asli (ya sample
 - Configurable sender/company/website footer and optional phone; canonical opt-out text is “reply 'no thanks'” and the reply parser maps it to the global suppression behavior. Only approved product facts are allowed; unconfirmed review, reporting and pilot claims stay excluded.
 - Non-email Harrogate material remains a later sales-playbook scope. Apply migrations `032_email_workflow_profile.sql` and `033_manual_conversation_email.sql` in order. Local Python syntax compilation and frontend TypeScript typecheck passed; automated tests and live sends were not run.
 - Correction: Instantly's step delay controls the following step, so each saved follow-up wait must be shifted onto the previous provider step (e.g. Email 2's 3-day delay belongs on the Email 1 payload). Standard `company_name` mapping is retained, with `pp_business_name` also supplied as a visible custom field. Existing campaigns/lead rows are not retroactively updated; verify with a new controlled campaign after backend restart.
+
+### Import cleanup provider reconciliation (2026-11-08)
+- Before previewing or deleting an import batch, the backend now reads each linked active/scheduled Instantly campaign by ID using the existing `campaigns:read` permission.
+- Provider-deleted campaigns are reconciled locally as completed; provider draft, paused, active, and completed states are mapped to their local lifecycle states. Unknown statuses or provider/API errors fail closed and leave cleanup blocked.
+- The final database cleanup RPC remains authoritative and still blocks deletion while a campaign can send. Cleanup preview refreshes after reconciliation so the UI receives current local state.
+- No migration or frontend change is required. This reconciliation only runs for a batch with a linked active/scheduled provider mapping; campaign sending, scheduling, and lead sync behavior are unchanged.
