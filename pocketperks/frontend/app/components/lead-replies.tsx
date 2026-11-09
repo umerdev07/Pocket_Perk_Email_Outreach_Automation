@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { apiFetch } from "../../lib/auth";
 import SuppressionManager from "./suppression-manager";
+import { useConfirmDialog } from "./confirm-dialog";
 
 type Reply = {
   id: string;
@@ -33,6 +34,7 @@ function splitQuotedMessage(body: string) {
 }
 
 export default function LeadReplies({ apiBase, canManageSuppressions = false }: Props) {
+  const { confirm, dialog } = useConfirmDialog();
   const [replies, setReplies] = useState<Reply[]>([]);
   const [hasMore, setHasMore] = useState(false);
   const [loadingMore, setLoadingMore] = useState(false);
@@ -125,7 +127,9 @@ export default function LeadReplies({ apiBase, canManageSuppressions = false }: 
 
   async function markOptOut(reply: Reply) {
     const address = reply.leads?.email || reply.from_email;
-    if (!window.confirm(`Add ${address} to the do-not-email list? Future imports and campaigns will skip this address.`)) return;
+    const confirmed = await confirm({ title: "Add this address to the do-not-email list?",
+      message: `${address} will be skipped in future imports and campaigns.`, confirmLabel: "Add to do-not-email list" });
+    if (!confirmed) return;
     setOptOutBusy(reply.id);
     setError("");
     setNotice("");
@@ -168,7 +172,10 @@ export default function LeadReplies({ apiBase, canManageSuppressions = false }: 
   }
 
   async function deleteLeadReply(reply: Reply) {
-    if (!window.confirm(`Permanently delete this reply from this workspace and the connected inbox? The recipient's mailbox copy will remain.`)) return;
+    const confirmed = await confirm({ title: "Delete this reply?",
+      message: "This permanently removes the reply from this workspace and the connected inbox. The recipient's mailbox copy will remain.",
+      confirmLabel: "Delete reply" });
+    if (!confirmed) return;
     setDeleteBusy(reply.id);
     setError("");
     setNotice("");
@@ -315,6 +322,7 @@ export default function LeadReplies({ apiBase, canManageSuppressions = false }: 
         })}</div>{hasMore && !search && <div className="reply-load-more"><button className="secondary-button" type="button" disabled={loadingMore} onClick={() => void loadMore()}>{loadingMore ? "Loading…" : "Load more replies"}</button></div>}</>}
       </section>
       <p className="reply-note">Read status here is tracked in PocketPerks and does not change the original mailbox status.</p>
+      {dialog}
     </section>
   );
 }

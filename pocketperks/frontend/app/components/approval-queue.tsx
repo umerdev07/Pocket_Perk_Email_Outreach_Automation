@@ -2,6 +2,7 @@
 
 import { apiFetch } from "../../lib/auth";
 import { userFacingError } from "../../lib/api";
+import { useConfirmDialog } from "./confirm-dialog";
 
 import { useEffect, useState } from "react";
 
@@ -28,6 +29,7 @@ type HistoryPage = { items: HistoryEntry[]; total: number; has_more: boolean; li
 type Props = { apiBase: string; notify: (message: string) => void; canClearHistory: boolean };
 
 export default function ApprovalQueue({ apiBase, notify, canClearHistory }: Props) {
+  const { confirm, dialog } = useConfirmDialog();
   const [items, setItems] = useState<ApprovalEmail[]>([]);
   const [total, setTotal] = useState(0);
   const [hasMore, setHasMore] = useState(false);
@@ -90,7 +92,9 @@ export default function ApprovalQueue({ apiBase, notify, canClearHistory }: Prop
   }
 
   async function clearHistory() {
-    const confirmed = window.confirm("Clear all Human Approval history? This permanently removes the review-history log only. Emails, pending reviews, leads and campaigns will stay unchanged.");
+    const confirmed = await confirm({ title: "Clear all review history?",
+      message: "This permanently removes the review-history log only. Emails, pending reviews, leads and campaigns will stay unchanged.",
+      confirmLabel: "Clear history" });
     if (!confirmed) return;
     setHistoryLoading(true);
     setError("");
@@ -287,6 +291,7 @@ export default function ApprovalQueue({ apiBase, notify, canClearHistory }: Prop
           </section>}
         </div>
       )}
+      {dialog}
     </div>
   );
 }

@@ -369,3 +369,8 @@ This log records completed work and verification reported in this project chat. 
 - Simplified review history to text/date filters and pagination. Added a confirmation-gated, admin-only action to clear review-history rows without touching email/campaign data.
 - Confirmed low-risk messages bypass Human Approval into the sending queue; medium/high risk messages remain review-required. This explains why recent leads can produce an empty review queue.
 - No migration needed. Backend compile and frontend TypeScript check pass. Automated tests were not run in this update; no live send occurred.
+
+## In-app confirmation dialogs (2026-11-09)
+- Replaced browser-native confirmations with a shared PocketPerks dialog for clearing review history, cleaning imported activity, deleting campaigns/steps/replies, and recording opt-outs.
+- Dialogs have clear action text, cancel/confirm controls, Escape and backdrop cancellation; destructive confirmations remain explicit.
+- Frontend TypeScript check passes. No migration needed; no email was sent.

@@ -46,6 +46,8 @@
 @media(max-width:680px){.review-history-filters{grid-template-columns:repeat(2,minmax(0,1fr))}.run-history-select{min-width:100%;width:100%}.latest-run-card .dashboard-chart-heading{flex-direction:column}.review-history-card>.approval-list-heading>span{margin-left:0}}
 .review-history-filters{grid-template-columns:minmax(220px,1fr) minmax(150px,220px) auto;align-items:end}.review-history-actions{display:flex;gap:8px;align-items:center}.review-history-actions .reject-button{white-space:nowrap}
 @media(max-width:680px){.review-history-filters{grid-template-columns:1fr 1fr}.review-history-filters .link-button{align-self:end}.review-history-actions{width:100%}.review-history-actions button{flex:1}}
+.confirm-dialog-backdrop{z-index:1000}.confirm-dialog{width:min(100%,440px);padding:26px;border:1px solid var(--line);border-radius:14px;background:#fff;box-shadow:0 24px 80px #10182845}.confirm-dialog-icon{display:grid;place-items:center;width:38px;height:38px;border-radius:50%;background:#fff3e8;color:#a64b13;font-size:20px;font-weight:750}.confirm-dialog h2{margin:16px 0 8px;color:var(--ink);font-size:20px;letter-spacing:-.02em}.confirm-dialog p{margin:0;color:var(--muted);font-size:13px;line-height:1.65;overflow-wrap:anywhere}.confirm-dialog-actions{display:flex;justify-content:flex-end;gap:9px;margin-top:22px}.confirm-dialog-actions button{min-height:40px}
+@media(max-width:480px){.confirm-dialog{padding:21px 18px}.confirm-dialog-actions{display:grid;grid-template-columns:1fr}.confirm-dialog-actions button{width:100%}}
 
 
 /* UI refinement: PocketPerks palette, contained tables and small-screen resilience. */
