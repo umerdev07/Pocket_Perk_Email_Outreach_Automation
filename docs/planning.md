@@ -409,7 +409,7 @@ Approval ke baad subject/body edit ho to hash badalne se status wapas `pending_r
 
 **Stage 4.1 (complete, 2026-11-06):** OpenRouter ko Claude Messages API se replace kiya. Draft generation, per-lead personalization aur risk assessment ek hi backend Claude client use karte hain; `CLAUDE_API_KEY` aur `CLAUDE_MODEL` backend-only settings hain. Ek minimal live call se configured Sonnet model ka response confirm hua; unit suite nahi chalayi gayi. Approval, Instantly sync/launch, replies ya scheduling behavior is provider change mein nahi badla.
 
-**Stage 4.2 (current):** Harrogate kit ke approved product facts aur sandwich-shop, café aur barber messaging ko shared backend prompt guidance mein apply karo. Existing campaign instructions, step context, verified lead category, human review, opt-out, Instantly sync/launch aur schedule authoritative rahenge. Is slice ke liye frontend ya database change tabhi ho agar current campaign fields insufficient hon. Exit check: teeno sectors ki sample copy source facts se bahar claim na kare, placeholders/fake reply subjects na hon, aur existing review/send workflow unchanged ho.
+**Stage 4.2 (complete, 2026-11-06):** Harrogate kit ke approved product facts aur sandwich-shop, café aur barber messaging shared backend prompt guidance mein apply ki gayi. Existing campaign instructions, step context, verified lead category, human review, opt-out, Instantly sync/launch aur schedule authoritative rahe. Later copy-guard follow-up Stage 4.3 mein complete hua.
 
 | Stage | Kaam | Deliverable | Exit check |
 | --- | --- | --- | --- |
@@ -547,3 +547,34 @@ Koi fake business data repo mein nahi. Testing ke liye user apni asli (ya sample
 - A campaign and imported batch pair can start only once. The backend checks prior runs and returns HTTP 409 with a clear explanation instead of generating another set of drafts or another Instantly campaign.
 - The Start Campaign button locks that same pair after a successful start for the current page session. After refresh/reopen, the backend remains authoritative and blocks the repeat.
 - A different imported batch can still run with the approved campaign. No migration is required; the existing unique active-run index continues to protect simultaneous requests.
+
+## Current readiness review (2026-11-08; supersedes earlier estimates/checklists)
+
+### Current assessment
+- Local feature readiness: approximately **90%**. Main workflow is implemented and has passed controlled small-batch live use; yeh engineering estimate hai, test-coverage metric nahi.
+- Production readiness: approximately **65%**. Production sign-off abhi baqi hai kyunki final regression, scale rehearsal, aur always-on hosting/operations verify nahi hue.
+- Core workflow implemented: lead import/duplicate checks; campaign setup and generic draft review; Claude generation and per-lead personalization; risk review and suppression; Instantly campaign/lead sync and gated auto-launch; send-status polling; reply sync and thread reply; dashboard; import cleanup; duplicate-run protection.
+- User-reported live checks: 9-recipient test mein 7 emails Inbox aur 2 Spam mein land hui; baad ke 4-lead/two-step test mein chaar leads Instantly sync hui. Yeh small controlled path ko validate karta hai, bulk throughput ya Inbox placement ko nahi.
+
+### Local feature sign-off baqi
+- Latest GitHub changes ko backend mein rebuild/restart karke confirm karo; latest frontend deployment bhi verify karo. Duplicate-start aur stale Instantly mapping fixes 2026-11-08 ko push hui hain, magar unka deployed runtime status abhi confirm nahi.
+- Latest code par full backend pytest suite aur frontend production build chalao. Aakhri user-reported full backend result 107 passed / 3 skipped tha, latest fixes se pehle; un fixes par syntax/diff checks hue, full suite nahi.
+- Isolated 200-lead mock rehearsal complete karo: chunks, progress, restart/resume, retry, suppression, duplicate protection, aur provider write duplication. Synthetic recipients ko live-connected Instantly workspace mein mat bhejo.
+- Intended Supabase project mein migrations 029–033 applied hone ki tasdeeq karo. Yeh webhook events, per-run end time, sending schedule/delays, sender profile aur manual conversation follow-ups ke liye hain.
+- Ek controlled live sequence par Email 2 ka 3-day wait, provider-confirmed send statuses, reply sync aur opt-out suppression dobara verify karo. Email Inbox/Spam placement app guarantee nahi kar sakti.
+
+### Production deployment se pehle baqi
+- Client ke always-on HTTPS server par deploy karo; backend secrets configure karo, jin mein funded Claude key/model, Supabase service key, Instantly API key aur webhook secret shamil hain. Secrets frontend/repository mein nahi jane chahiye.
+- Stable HTTPS endpoint milne ke baad Instantly webhook register karo; polling fallback rehne do, aur deployed environment mein signature validation, retry aur duplicate-event handling verify karo.
+- Server ko campaign activation aur exact end-time pause ke waqt online rehna chahiye. Logs/alerts, database backup/restore, aur restart/rollback process configure karo.
+- Lead verifier ke accepted valid labels/blocking flags aur sender footer/contact details client se confirm karo; tab tak strict eligibility enable na karo.
+- Reviewer invitation/role smoke check optional aur deferred hai jab tak reviewer account operationally zaroori na ho.
+
+### Release decision
+- **Local MVP:** nearly feature-complete; formal sign-off se pehle final regression aur 200-lead isolated rehearsal baqi hain.
+- **Production:** abhi complete nahi. Always-on deploy, webhook registration, secrets/monitoring/backups aur final checks verify hone ke baad hi production-ready mark karo.
+
+### Public landing page (2026-11-09)
+- Added a public PocketPerks outreach landing page at `/` with a concise product overview, four workflow stages, reserved demo-video area, FAQs and footer navigation.
+- The existing authenticated application remains available at `/workspace`; `/login` uses the existing Supabase sign-in and routes signed-in users into the workspace. Account and password recovery routes remain behind the same auth gate/flow.
+- No database migration or backend changes are needed. Frontend TypeScript check and production build pass. Deploy the frontend to publish the page; add the approved demo video when ready.

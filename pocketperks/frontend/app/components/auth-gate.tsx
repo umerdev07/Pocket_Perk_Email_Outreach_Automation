@@ -1,6 +1,7 @@
 "use client";
 
 import { createContext, FormEvent, useContext, useEffect, useState } from "react";
+import { usePathname, useRouter } from "next/navigation";
 import { apiFetch, AuthSession, currentSession, requestPasswordReset, signIn, signOut, WorkspaceRole } from "../../lib/auth";
 import AuthFrame from "./auth-frame";
 
@@ -15,6 +16,8 @@ export function useWorkspaceAuth() {
 }
 
 export default function AuthGate({ children }: { children: React.ReactNode }) {
+  const pathname = usePathname();
+  const router = useRouter();
   const [user, setUser] = useState<WorkspaceUser | null>(null);
   const [loading, setLoading] = useState(true);
   const [email, setEmail] = useState("");
@@ -56,6 +59,7 @@ export default function AuthGate({ children }: { children: React.ReactNode }) {
       const session = await signIn(email.trim(), password);
       await loadWorkspaceUser(session);
       setPassword("");
+      if (pathname === "/login") router.push("/workspace");
     } catch (cause) {
       await signOut();
       setUser(null);
@@ -83,6 +87,7 @@ export default function AuthGate({ children }: { children: React.ReactNode }) {
   if (loading) return <AuthFrame><section className="auth-card auth-loading"><span className="auth-spinner" /><p>Checking your workspace sign-in…</p></section></AuthFrame>;
   if (passwordResetPath) return children;
   if (user) return <AuthContext.Provider value={{ user, logout }}>{children}</AuthContext.Provider>;
+  if (pathname === "/") return children;
 
   return <AuthFrame><section className="auth-card" aria-labelledby="auth-title">
     <small className="auth-card-kicker">WELCOME BACK</small>
