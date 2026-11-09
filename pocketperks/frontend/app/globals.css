@@ -533,3 +533,56 @@ body { background: var(--paper); color: var(--ink); }
 .landing-footer{border-color:var(--line)}
 .landing-login{border-color:#d8e3d9;color:var(--brand-green-dark);box-shadow:0 2px 8px rgb(24 53 42 / 4%)}
 .landing-login:hover{border-color:#b8d3bd;background:#f7fbf7}
+
+/* Shared workspace typography and gentle in-page navigation. */
+html{scroll-behavior:smooth;scroll-padding-top:24px}
+@media(prefers-reduced-motion:reduce){html{scroll-behavior:auto}}
+body{font-family:Inter,"Segoe UI Variable","Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;font-size:14px;line-height:1.5}
+button,input,select,textarea{font-family:Inter,"Segoe UI Variable","Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif}
+.landing-page{font-family:inherit}
+.landing-nav{font-size:14px}
+.landing-login{font-size:13px}
+.landing-eyebrow,.landing-section-kicker{font-size:10px}
+.landing-hero-copy>p{font-size:16px;line-height:1.7}
+.landing-trust-line{font-size:11px}
+.landing-preview-top{font-size:9px}
+.landing-preview-title{font-size:19px}
+.landing-preview-subtitle{font-size:11px}
+.preview-flow-row b{font-size:12px}
+.preview-flow-row small{font-size:10px}
+.preview-flow-row .preview-live{font-size:8px}
+.landing-preview-footer{font-size:9px}
+.landing-float-note b{font-size:11px}
+.landing-float-note small{font-size:10px}
+.landing-hero-bottom{font-size:9px}
+.landing-hero-caption{font-size:10px}
+.landing-intro h2{font-size:31px}
+.landing-intro>p{font-size:13px;line-height:1.7}
+.landing-section-heading h2,.landing-demo h2{font-size:40px}
+.landing-section-heading>p{font-size:13px}
+.landing-stage-top>span{font-size:10px}
+.landing-stage-card h3{font-size:16px}
+.landing-stage-card p{font-size:12px;line-height:1.65}
+.landing-demo-copy>p{font-size:13px}
+.landing-demo-login{font-size:13px}
+.landing-video-label>span{font-size:9px}
+.landing-video-label b{font-size:14px}
+.landing-video-label small{font-size:10px}
+.landing-video-corner{font-size:9px}
+.landing-faq-heading h2{font-size:36px}
+.landing-faq-heading>p,.landing-faq-list details p{font-size:12px}
+.landing-faq-list summary{font-size:13px}
+.landing-cta .landing-section-kicker{font-size:9px}
+.landing-cta h2{font-size:24px}
+.landing-cta p{font-size:12px}
+.landing-footer>p,.landing-footer nav a{font-size:10px}
+.landing-copyright{font-size:9px}
+@media(max-width:560px){
+  .landing-hero h1{font-size:clamp(39px,11vw,45px)}
+  .landing-hero-copy>p{font-size:14px}
+  .landing-hero-bottom{font-size:8px}
+  .landing-hero-caption{font-size:9px}
+  .landing-intro h2{font-size:27px}
+  .landing-section-heading h2,.landing-demo h2{font-size:34px}
+  .landing-faq-heading h2{font-size:32px}
+}
