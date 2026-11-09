@@ -72,8 +72,7 @@ async def list_pending_approvals(settings: Settings, *, limit: int, offset: int)
 
 
 async def list_review_history(settings: Settings, *, limit: int, offset: int,
-                              search: str = "", campaign: str = "", action: str = "",
-                              status: str = "", risk_level: str = "", days: int = 30) -> dict:
+                              search: str = "", days: int = 30) -> dict:
     """Return a filtered, paged view of immutable automated and human audit events."""
     params = {
         "select": "id,email_id,action,status,risk_level,risk_reason,subject,business_name,recipient_email,campaign_name,step_number,created_at",
@@ -81,18 +80,9 @@ async def list_review_history(settings: Settings, *, limit: int, offset: int,
     }
     # Keep PostgREST filter syntax out of user-provided text while allowing common names/addresses.
     safe_search = re.sub(r"[^\w\s@.+'-]", " ", search, flags=re.UNICODE).strip()[:80]
-    safe_campaign = re.sub(r"[(),*%]", "", campaign).strip()[:160]
     if safe_search:
         pattern = f"*{safe_search}*"
         params["or"] = f"(business_name.ilike.{pattern},recipient_email.ilike.{pattern},campaign_name.ilike.{pattern},subject.ilike.{pattern})"
-    if safe_campaign:
-        params["campaign_name"] = f"ilike.*{safe_campaign}*"
-    if action:
-        params["action"] = f"eq.{action}"
-    if status:
-        params["status"] = f"eq.{status}"
-    if risk_level:
-        params["risk_level"] = f"eq.{risk_level}"
     if days:
         params["created_at"] = f"gte.{(datetime.now(UTC) - timedelta(days=days)).isoformat()}"
     async with httpx.AsyncClient(timeout=20) as client:
@@ -107,6 +97,17 @@ async def list_review_history(settings: Settings, *, limit: int, offset: int,
         total = offset + len(rows)
     return {"items": rows, "total": total, "limit": limit, "offset": offset,
             "has_more": offset + len(rows) < total}
+
+
+async def clear_review_history(settings: Settings) -> dict:
+    """Clear the audit log only; personalized emails and campaign data are untouched."""
+    async with httpx.AsyncClient(timeout=30) as client:
+        response = await client.delete(f"{_base(settings)}/email_review_history",
+                                       params={"id": "not.is.null"},
+                                       headers=_headers(settings, "return=minimal"))
+    if not response.is_success:
+        raise HTTPException(status_code=503, detail="Could not clear email review history.")
+    return {"cleared": True}
 
 
 async def get_email_review_context(settings: Settings, email_id: str) -> dict | None:

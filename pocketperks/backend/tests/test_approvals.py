@@ -30,16 +30,30 @@ def test_approval_history_returns_saved_automated_and_human_review_events():
                            "risk_level": "LOW", "risk_reason": "No obvious content-level spam signals."}],
                 "total": 1, "limit": 10, "offset": 5, "has_more": False}
     with patch("app.routers.approvals.list_review_history", new=AsyncMock(return_value=expected)) as listing:
-        response = client.get("/api/approvals/history?limit=10&offset=5&search=cafe&campaign=Test&action=risk_assessed&status=queued&risk_level=LOW&days=90")
+        response = client.get("/api/approvals/history?limit=10&offset=5&search=cafe&days=90")
     assert response.status_code == 200
     assert response.json() == expected
-    assert listing.await_args.kwargs == {"limit": 10, "offset": 5, "search": "cafe", "campaign": "Test",
-                                         "action": "risk_assessed", "status": "queued", "risk_level": "LOW", "days": 90}
+    assert listing.await_args.kwargs == {"limit": 10, "offset": 5, "search": "cafe", "days": 90}
 
 
 def test_approval_history_rejects_unknown_filter_values():
-    response = client.get("/api/approvals/history?action=delete_all")
+    response = client.get("/api/approvals/history?days=900")
     assert response.status_code == 422
+
+
+def test_clear_approval_history_requires_confirmation():
+    with patch("app.routers.approvals.clear_review_history", new=AsyncMock()) as clear:
+        response = client.post("/api/approvals/history/clear", json={"confirm": False})
+    assert response.status_code == 422
+    clear.assert_not_awaited()
+
+
+def test_clear_approval_history_clears_only_the_history_log():
+    with patch("app.routers.approvals.clear_review_history", new=AsyncMock(return_value={"cleared": True})) as clear:
+        response = client.post("/api/approvals/history/clear", json={"confirm": True})
+    assert response.status_code == 200
+    assert response.json() == {"cleared": True}
+    clear.assert_awaited_once()
 
 
 def test_edit_rechecks_risk_and_requires_human_approval_again():

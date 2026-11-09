@@ -25,9 +25,9 @@ type HistoryEntry = {
   created_at: string;
 };
 type HistoryPage = { items: HistoryEntry[]; total: number; has_more: boolean; limit: number; offset: number };
-type Props = { apiBase: string; notify: (message: string) => void };
+type Props = { apiBase: string; notify: (message: string) => void; canClearHistory: boolean };
 
-export default function ApprovalQueue({ apiBase, notify }: Props) {
+export default function ApprovalQueue({ apiBase, notify, canClearHistory }: Props) {
   const [items, setItems] = useState<ApprovalEmail[]>([]);
   const [total, setTotal] = useState(0);
   const [hasMore, setHasMore] = useState(false);
@@ -44,10 +44,6 @@ export default function ApprovalQueue({ apiBase, notify }: Props) {
   const [historyHasMore, setHistoryHasMore] = useState(false);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [historySearch, setHistorySearch] = useState("");
-  const [historyCampaign, setHistoryCampaign] = useState("");
-  const [historyAction, setHistoryAction] = useState("");
-  const [historyStatus, setHistoryStatus] = useState("");
-  const [historyRisk, setHistoryRisk] = useState("");
   const [historyDays, setHistoryDays] = useState("30");
 
   async function loadQueue(offset = 0, append = false) {
@@ -73,20 +69,13 @@ export default function ApprovalQueue({ apiBase, notify }: Props) {
 
   useEffect(() => { void loadQueue(); /* Load once when the page opens. */ }, []);
 
-  async function loadHistory(offset = 0, append = false, overrides?: {
-    search: string; campaign: string; action: string; status: string; risk_level: string; days: string;
-  }) {
+  async function loadHistory(offset = 0, append = false, overrides?: { search: string; days: string }) {
     setHistoryLoading(true);
     setError("");
     try {
-      const filters = overrides || { search: historySearch.trim(), campaign: historyCampaign, action: historyAction,
-        status: historyStatus, risk_level: historyRisk, days: historyDays };
+      const filters = overrides || { search: historySearch.trim(), days: historyDays };
       const params = new URLSearchParams({ limit: "50", offset: String(offset), days: filters.days });
       if (filters.search.trim()) params.set("search", filters.search.trim());
-      if (filters.campaign) params.set("campaign", filters.campaign);
-      if (filters.action) params.set("action", filters.action);
-      if (filters.status) params.set("status", filters.status);
-      if (filters.risk_level) params.set("risk_level", filters.risk_level);
       const response = await apiFetch(`${apiBase}/api/approvals/history?${params}`);
       const data = await response.json() as HistoryPage & { detail?: string };
       if (!response.ok) throw new Error(data.detail || "Could not load email review history.");
@@ -95,6 +84,30 @@ export default function ApprovalQueue({ apiBase, notify }: Props) {
       setHistoryHasMore(data.has_more);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Could not load email review history.");
+    } finally {
+      setHistoryLoading(false);
+    }
+  }
+
+  async function clearHistory() {
+    const confirmed = window.confirm("Clear all Human Approval history? This permanently removes the review-history log only. Emails, pending reviews, leads and campaigns will stay unchanged.");
+    if (!confirmed) return;
+    setHistoryLoading(true);
+    setError("");
+    try {
+      const response = await apiFetch(`${apiBase}/api/approvals/history/clear`, {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ confirm: true }),
+      });
+      const data = await response.json() as { detail?: string; cleared?: boolean };
+      if (!response.ok) throw new Error(data.detail || "Could not clear review history.");
+      setHistory([]);
+      setHistoryTotal(0);
+      setHistoryHasMore(false);
+      setHistorySearch("");
+      setHistoryDays("30");
+      notify("Human Approval history cleared. Email and campaign data were kept.");
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Could not clear review history.");
     } finally {
       setHistoryLoading(false);
     }
@@ -206,21 +219,13 @@ export default function ApprovalQueue({ apiBase, notify }: Props) {
       {tab === "history" ? <section className="card review-history-card">
         <div className="approval-list-heading"><h2>Recent email checks and decisions</h2>
           <span>{historyTotal.toLocaleString()} matching records</span>
-          <button className="secondary-button" type="button" disabled={historyLoading} onClick={() => void loadHistory()}>{historyLoading ? "Updating…" : "Apply filters"}</button></div>
+          <div className="review-history-actions"><button className="secondary-button" type="button" disabled={historyLoading} onClick={() => void loadHistory()}>{historyLoading ? "Updating…" : "Apply filters"}</button>
+            {canClearHistory && <button className="reject-button" type="button" disabled={historyLoading} onClick={() => void clearHistory()}>Clear history</button>}</div></div>
         <div className="review-history-filters">
           <label>Search<input value={historySearch} placeholder="Business, email, subject…" onChange={event => setHistorySearch(event.target.value)} onKeyDown={event => { if (event.key === "Enter") void loadHistory(); }} /></label>
-          <label>Campaign<input value={historyCampaign} placeholder="Campaign name" onChange={event => setHistoryCampaign(event.target.value)} onKeyDown={event => { if (event.key === "Enter") void loadHistory(); }} /></label>
-          <label>Event<select value={historyAction} onChange={event => setHistoryAction(event.target.value)}><option value="">All events</option>
-            <option value="risk_assessed">Message checked</option><option value="sent_to_review">Sent for review</option><option value="auto_queued">Ready to send</option>
-            <option value="human_approved">Approved</option><option value="human_rejected">Rejected</option><option value="email_edited">Edited</option><option value="risk_rechecked">Checked again</option><option value="status_changed">Status changed</option>
-          </select></label>
-          <label>Outcome<select value={historyStatus} onChange={event => setHistoryStatus(event.target.value)}><option value="">All outcomes</option>
-            <option value="queued">Ready to send</option><option value="pending_review">Needs review</option><option value="approved">Approved</option><option value="rejected">Rejected</option><option value="sent">Sent</option><option value="failed">Failed</option>
-          </select></label>
-          <label>Risk<select value={historyRisk} onChange={event => setHistoryRisk(event.target.value)}><option value="">All risk levels</option><option value="LOW">Low</option><option value="MEDIUM">Medium</option><option value="HIGH">High</option></select></label>
           <label>Date range<select value={historyDays} onChange={event => setHistoryDays(event.target.value)}><option value="7">Last 7 days</option><option value="30">Last 30 days</option><option value="90">Last 90 days</option><option value="365">Last year</option><option value="0">All time</option></select></label>
-          <button className="link-button" type="button" onClick={() => { setHistorySearch(""); setHistoryCampaign(""); setHistoryAction(""); setHistoryStatus(""); setHistoryRisk(""); setHistoryDays("30");
-            void loadHistory(0, false, { search: "", campaign: "", action: "", status: "", risk_level: "", days: "30" }); }}>Clear filters</button>
+          <button className="link-button" type="button" onClick={() => { setHistorySearch(""); setHistoryDays("30");
+            void loadHistory(0, false, { search: "", days: "30" }); }}>Reset filters</button>
         </div>
         {historyLoading && history.length === 0 ? <p className="chart-empty">Loading review history…</p> : history.length === 0 ? <div className="approval-empty"><span>↻</span><h2>No matching history</h2><p>Try widening the date range or clearing a filter.</p></div> : <div className="review-history-list">{history.map(entry => <article className="review-history-item" key={entry.id}>
           <div className="review-history-top"><div><b>{entry.business_name || entry.recipient_email || "Email"}</b>

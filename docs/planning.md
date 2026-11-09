@@ -582,6 +582,6 @@ Koi fake business data repo mein nahi. Testing ke liye user apni asli (ya sample
 
 ### Dashboard run history and approval-history controls (2026-11-09)
 - Dashboard now loads the 12 most recent campaign runs and lets the user select one; selected-run details show date, status, processed leads, queued/waiting emails, confirmed sends, reviews, and failures. Details for earlier runs load on demand.
-- Human Approval history now supports text, campaign, event, outcome, risk, and date-range filters with server-side pagination and a matching-record count. Audit rows remain preserved; filters and paging keep the page manageable.
+- Human Approval history uses simple text and date-range filters with server-side pagination. Admins can clear the full audit log after confirmation; reviewers cannot clear it. This removes only review-history rows and leaves emails, pending reviews, leads, and campaigns unchanged.
 - Confirmed the intended approval rule remains unchanged: LOW-risk generated emails move to the send queue (or remain approved for manual conversation steps); MEDIUM/HIGH emails enter Human Approval. An empty queue is expected when generated emails are rated LOW.
-- No database migration is required. Backend Python compilation and frontend typecheck passed. Backend tests were attempted but the local Windows TestClient stalled while creating its asyncio Proactor event loop. No live email was sent and nothing was pushed.
+- No database migration is required. Backend Python compilation and frontend typecheck passed. Backend tests were not run in this update. No live email was sent.

@@ -366,6 +366,6 @@ This log records completed work and verification reported in this project chat. 
 
 ## Dashboard history and Human Approval history (2026-11-09)
 - Added recent run selector to Dashboard (last 12 runs) and on-demand details for selected historical runs.
-- Added server-side filters and pagination to review history; did not add audit deletion so review records remain available.
+- Simplified review history to text/date filters and pagination. Added a confirmation-gated, admin-only action to clear review-history rows without touching email/campaign data.
 - Confirmed low-risk messages bypass Human Approval into the sending queue; medium/high risk messages remain review-required. This explains why recent leads can produce an empty review queue.
-- No migration needed. Backend compile and frontend TypeScript check pass. Windows TestClient tests stalled during asyncio Proactor loop creation; no live send or push occurred.
+- No migration needed. Backend compile and frontend TypeScript check pass. Automated tests were not run in this update; no live send occurred.

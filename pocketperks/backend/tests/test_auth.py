@@ -19,6 +19,16 @@ def test_reviewer_can_open_approval_queue():
     assert response.json()["items"] == []
 
 
+def test_reviewer_cannot_clear_approval_history():
+    app = create_app()
+    with patch("app.main.authenticate_request", new=AsyncMock(return_value={"id": "u1", "email": "reviewer@example.com", "role": "reviewer"})), \
+         patch("app.routers.approvals.clear_review_history", new=AsyncMock()) as clear:
+        response = TestClient(app).post("/api/approvals/history/clear", json={"confirm": True},
+                                        headers={"Authorization": "Bearer test-token"})
+    assert response.status_code == 403
+    clear.assert_not_awaited()
+
+
 def test_reviewer_cannot_open_campaign_api():
     app = create_app()
     with patch("app.main.authenticate_request", new=AsyncMock(return_value={"id": "u1", "email": "reviewer@example.com", "role": "reviewer"})):
