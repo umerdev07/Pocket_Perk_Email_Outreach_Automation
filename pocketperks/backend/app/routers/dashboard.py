@@ -1,7 +1,8 @@
 from fastapi import APIRouter, Depends, Query
+from uuid import UUID
 
 from app.config import Settings, get_settings
-from app.dashboard_db import get_dashboard_summary
+from app.dashboard_db import get_dashboard_run_detail, get_dashboard_summary
 
 router = APIRouter(prefix="/api/dashboard", tags=["dashboard"])
 
@@ -10,3 +11,9 @@ router = APIRouter(prefix="/api/dashboard", tags=["dashboard"])
 async def dashboard_summary(days: int = Query(default=14, ge=7, le=90),
                             settings: Settings = Depends(get_settings)):
     return await get_dashboard_summary(settings, activity_days=days)
+
+
+@router.get("/runs/{run_id}")
+async def dashboard_run_detail(run_id: UUID,
+                               settings: Settings = Depends(get_settings)):
+    return await get_dashboard_run_detail(settings, str(run_id))

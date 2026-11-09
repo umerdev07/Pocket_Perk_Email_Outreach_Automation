@@ -39,8 +39,16 @@ async def get_approval_queue(limit: int = Query(default=50, ge=1, le=100),
 @router.get("/api/approvals/history")
 async def get_approval_history(limit: int = Query(default=50, ge=1, le=100),
                                offset: int = Query(default=0, ge=0),
+                               search: str = Query(default="", max_length=80),
+                               campaign: str = Query(default="", max_length=160),
+                               action: str = Query(default="", pattern="^(|risk_assessed|human_approved|human_rejected|email_edited|auto_queued|sent_to_review|risk_rechecked|status_changed)$"),
+                               status: str = Query(default="", pattern="^(|generated|pending_review|approved|queued|sent|sent_test|failed|rejected)$"),
+                               risk_level: str = Query(default="", pattern="^(|LOW|MEDIUM|HIGH)$"),
+                               days: int = Query(default=30, ge=0, le=365),
                                settings: Settings = Depends(get_settings)):
-    return await list_review_history(settings, limit=limit, offset=offset)
+    return await list_review_history(settings, limit=limit, offset=offset, search=search,
+                                     campaign=campaign, action=action, status=status,
+                                     risk_level=risk_level, days=days)
 
 
 @router.patch("/api/emails/{email_id}")

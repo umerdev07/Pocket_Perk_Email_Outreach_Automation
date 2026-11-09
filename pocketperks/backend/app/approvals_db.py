@@ -1,4 +1,7 @@
 """Supabase persistence for the human approval queue."""
+import re
+from datetime import UTC, datetime, timedelta
+
 import httpx
 from fastapi import HTTPException
 
@@ -68,16 +71,42 @@ async def list_pending_approvals(settings: Settings, *, limit: int, offset: int)
             "has_more": offset + len(rows) < total}
 
 
-async def list_review_history(settings: Settings, *, limit: int, offset: int) -> list[dict]:
-    """Return database-triggered audit entries for automated checks and human decisions."""
+async def list_review_history(settings: Settings, *, limit: int, offset: int,
+                              search: str = "", campaign: str = "", action: str = "",
+                              status: str = "", risk_level: str = "", days: int = 30) -> dict:
+    """Return a filtered, paged view of immutable automated and human audit events."""
+    params = {
+        "select": "id,email_id,action,status,risk_level,risk_reason,subject,business_name,recipient_email,campaign_name,step_number,created_at",
+        "order": "created_at.desc,id.desc", "limit": str(limit), "offset": str(offset),
+    }
+    # Keep PostgREST filter syntax out of user-provided text while allowing common names/addresses.
+    safe_search = re.sub(r"[^\w\s@.+'-]", " ", search, flags=re.UNICODE).strip()[:80]
+    safe_campaign = re.sub(r"[(),*%]", "", campaign).strip()[:160]
+    if safe_search:
+        pattern = f"*{safe_search}*"
+        params["or"] = f"(business_name.ilike.{pattern},recipient_email.ilike.{pattern},campaign_name.ilike.{pattern},subject.ilike.{pattern})"
+    if safe_campaign:
+        params["campaign_name"] = f"ilike.*{safe_campaign}*"
+    if action:
+        params["action"] = f"eq.{action}"
+    if status:
+        params["status"] = f"eq.{status}"
+    if risk_level:
+        params["risk_level"] = f"eq.{risk_level}"
+    if days:
+        params["created_at"] = f"gte.{(datetime.now(UTC) - timedelta(days=days)).isoformat()}"
     async with httpx.AsyncClient(timeout=20) as client:
-        response = await client.get(f"{_base(settings)}/email_review_history", params={
-            "select": "id,email_id,action,status,risk_level,risk_reason,subject,business_name,recipient_email,campaign_name,step_number,created_at",
-            "order": "created_at.desc,id.desc", "limit": str(limit), "offset": str(offset),
-        }, headers=_headers(settings))
+        response = await client.get(f"{_base(settings)}/email_review_history", params=params,
+                                    headers=_headers(settings, "count=exact"))
     if not response.is_success:
         raise HTTPException(status_code=503, detail="Could not load email review history. Apply the latest Supabase migration.")
-    return response.json()
+    rows = response.json()
+    try:
+        total = int(response.headers.get("content-range", "").rsplit("/", 1)[1])
+    except (IndexError, ValueError):
+        total = offset + len(rows)
+    return {"items": rows, "total": total, "limit": limit, "offset": offset,
+            "has_more": offset + len(rows) < total}
 
 
 async def get_email_review_context(settings: Settings, email_id: str) -> dict | None:

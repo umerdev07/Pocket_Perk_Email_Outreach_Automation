@@ -579,3 +579,9 @@ Koi fake business data repo mein nahi. Testing ke liye user apni asli (ya sample
 - The existing authenticated application remains available at `/workspace`; `/login` uses the existing Supabase sign-in and routes signed-in users into the workspace. Account and password recovery routes remain behind the same auth gate/flow.
 - Landing copy documents CSV/XLSX import and duplicate/invalid/suppression checks, Claude personalization, risk-based human review, Instantly campaign activation/scheduling, provider-confirmed sends, replies and future-sync suppression. It clarifies invite-only access and avoids promising inbox placement.
 - The public route renders without waiting for session restoration. No database migration or backend changes are needed. Frontend TypeScript check and production build pass. Deploy the frontend to publish the page; add the approved demo video when ready.
+
+### Dashboard run history and approval-history controls (2026-11-09)
+- Dashboard now loads the 12 most recent campaign runs and lets the user select one; selected-run details show date, status, processed leads, queued/waiting emails, confirmed sends, reviews, and failures. Details for earlier runs load on demand.
+- Human Approval history now supports text, campaign, event, outcome, risk, and date-range filters with server-side pagination and a matching-record count. Audit rows remain preserved; filters and paging keep the page manageable.
+- Confirmed the intended approval rule remains unchanged: LOW-risk generated emails move to the send queue (or remain approved for manual conversation steps); MEDIUM/HIGH emails enter Human Approval. An empty queue is expected when generated emails are rated LOW.
+- No database migration is required. Backend Python compilation and frontend typecheck passed. Backend tests were attempted but the local Windows TestClient stalled while creating its asyncio Proactor event loop. No live email was sent and nothing was pushed.

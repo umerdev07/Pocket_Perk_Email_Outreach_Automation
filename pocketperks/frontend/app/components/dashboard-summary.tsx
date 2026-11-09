@@ -4,6 +4,23 @@ import { apiFetch } from "../../lib/auth";
 
 import { useCallback, useEffect, useState } from "react";
 
+type RunDetail = {
+  run_id: string;
+  campaign_id: string;
+  campaign_name: string;
+  status: string;
+  total_leads: number;
+  processed: number;
+  skipped: number;
+  failed_leads: number;
+  queued_emails: number;
+  sent_emails: number;
+  failed_emails: number;
+  pending_review_emails: number;
+  created_at: string;
+  finished_at?: string | null;
+};
+
 type Summary = {
   total_leads: number;
   total_campaigns: number;
@@ -17,20 +34,8 @@ type Summary = {
   instantly_leads_synced: number;
   instantly_active_campaigns: number;
   instantly_auto_launch_enabled: boolean;
-  latest_run: {
-    run_id: string;
-    campaign_name: string;
-    status: string;
-    total_leads: number;
-    processed: number;
-    skipped: number;
-    failed_leads: number;
-    queued_emails: number;
-    sent_emails: number;
-    failed_emails: number;
-    pending_review_emails: number;
-    created_at: string;
-  } | null;
+  latest_run: RunDetail | null;
+  recent_runs: { run_id: string; campaign_name: string; status: string; total_leads: number; created_at: string }[];
   activity: {
     available?: boolean;
     days: { date: string; leads: number; replies: number }[];
@@ -51,6 +56,10 @@ export default function DashboardSummary({ apiBase, refreshKey, onNavigate }: Pr
   const [error, setError] = useState("");
   const [activityDays, setActivityDays] = useState(14);
   const [selectedEmailStatus, setSelectedEmailStatus] = useState("");
+  const [selectedRunId, setSelectedRunId] = useState("");
+  const [selectedRunDetail, setSelectedRunDetail] = useState<RunDetail | null>(null);
+  const [runDetailLoading, setRunDetailLoading] = useState(false);
+  const [runDetailError, setRunDetailError] = useState("");
 
   const loadSummary = useCallback(async () => {
     setLoading(true);
@@ -72,6 +81,38 @@ export default function DashboardSummary({ apiBase, refreshKey, onNavigate }: Pr
     const timer = window.setInterval(() => void loadSummary(), 60_000);
     return () => window.clearInterval(timer);
   }, [loadSummary, refreshKey]);
+
+  useEffect(() => {
+    const runs = summary?.recent_runs || [];
+    if (!runs.length) {
+      setSelectedRunId("");
+      setSelectedRunDetail(null);
+      return;
+    }
+    if (!selectedRunId || !runs.some(run => run.run_id === selectedRunId)) {
+      setSelectedRunId(runs[0].run_id);
+    }
+  }, [summary, selectedRunId]);
+
+  useEffect(() => {
+    if (!selectedRunId || !summary) return;
+    if (summary.latest_run?.run_id === selectedRunId) {
+      setSelectedRunDetail(summary.latest_run);
+      setRunDetailError("");
+      return;
+    }
+    let cancelled = false;
+    setRunDetailLoading(true);
+    setRunDetailError("");
+    void apiFetch(`${apiBase}/api/dashboard/runs/${selectedRunId}`).then(async response => {
+      const data = await response.json() as RunDetail & { detail?: string };
+      if (!response.ok) throw new Error(data.detail || "Could not load this campaign activity.");
+      if (!cancelled) setSelectedRunDetail(data);
+    }).catch(cause => {
+      if (!cancelled) setRunDetailError(cause instanceof Error ? cause.message : "Could not load this campaign activity.");
+    }).finally(() => { if (!cancelled) setRunDetailLoading(false); });
+    return () => { cancelled = true; };
+  }, [apiBase, selectedRunId, summary]);
 
   const cards = summary ? [
     { label: "Total leads", value: summary.total_leads, hint: "Imported and available", tone: "violet" },
@@ -134,21 +175,29 @@ export default function DashboardSummary({ apiBase, refreshKey, onNavigate }: Pr
           </article>
         ))}
       </div>
-      {summary?.latest_run && <article className="dashboard-chart-card latest-run-card">
+      {summary?.recent_runs?.length ? <article className="dashboard-chart-card latest-run-card">
         <div className="dashboard-chart-heading"><div>
           <h3>Latest campaign activity</h3>
-          <p>{summary.latest_run.campaign_name} · {new Date(summary.latest_run.created_at).toLocaleString()}</p>
-        </div><span className={`badge ${summary.latest_run.status}`}>{formatStatus(summary.latest_run.status)}</span></div>
-        <div className="latest-run-metrics">
-          <div><small>Leads processed</small><b>{summary.latest_run.processed} / {summary.latest_run.total_leads}</b></div>
-          <div><small>Waiting to send</small><b>{summary.latest_run.queued_emails}</b></div>
-          <div><small>Confirmed sent</small><b>{summary.latest_run.sent_emails}</b></div>
-          <div><small>Needs review</small><b>{summary.latest_run.pending_review_emails}</b></div>
-          {summary.latest_run.failed_emails + summary.latest_run.failed_leads > 0 &&
-            <div className="latest-run-warning"><small>Failed</small><b>{summary.latest_run.failed_emails + summary.latest_run.failed_leads}</b></div>}
-        </div>
-        <small className="latest-run-note">These counts are only for this run. Older campaign sends remain in the workspace totals above.</small>
-      </article>}
+          <p>{selectedRunDetail ? `${selectedRunDetail.campaign_name} · ${new Date(selectedRunDetail.created_at).toLocaleString()}` : "Choose a recent campaign run to see its activity."}</p>
+        </div><label className="run-history-select"><span>Recent campaigns</span><select aria-label="Select recent campaign activity" value={selectedRunId}
+          onChange={event => setSelectedRunId(event.target.value)}>
+          {summary.recent_runs.map(run => <option key={run.run_id} value={run.run_id}>
+            {run.campaign_name} · {new Date(run.created_at).toLocaleString()} · {formatStatus(run.status)}
+          </option>)}
+        </select></label></div>
+        {runDetailLoading ? <p className="chart-empty">Loading selected campaign activity…</p> : runDetailError ? <p role="alert" className="chart-empty">{runDetailError}</p> : selectedRunDetail && <>
+          <div className="run-history-status"><span className={`badge ${selectedRunDetail.status}`}>{formatStatus(selectedRunDetail.status)}</span><small>Run started {new Date(selectedRunDetail.created_at).toLocaleString()}</small></div>
+          <div className="latest-run-metrics">
+            <div><small>Leads processed</small><b>{selectedRunDetail.processed} / {selectedRunDetail.total_leads}</b></div>
+            <div><small>Waiting to send</small><b>{selectedRunDetail.queued_emails}</b></div>
+            <div><small>Confirmed sent</small><b>{selectedRunDetail.sent_emails}</b></div>
+            <div><small>Needs review</small><b>{selectedRunDetail.pending_review_emails}</b></div>
+            {selectedRunDetail.failed_emails + selectedRunDetail.failed_leads > 0 &&
+              <div className="latest-run-warning"><small>Failed</small><b>{selectedRunDetail.failed_emails + selectedRunDetail.failed_leads}</b></div>}
+          </div>
+          <small className="latest-run-note">Counts above belong to the selected run. Workspace totals are shown in the cards above.</small>
+        </>}
+      </article> : null}
       {summary && <div className="dashboard-charts">
         <article className="dashboard-chart-card activity-chart-card">
           <div className="dashboard-chart-heading"><div><h3>Workspace activity</h3><p>Imported leads and received replies over time</p></div>

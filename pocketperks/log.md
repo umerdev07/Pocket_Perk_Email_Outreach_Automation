@@ -363,3 +363,9 @@ This log records completed work and verification reported in this project chat. 
 - The dashboard showed 16 queued email records because the same 4-lead, 2-step campaign/batch pair had been started twice; each run created 8 email records.
 - Backend now rejects any second start for an already-used campaign/batch pair with HTTP 409. The frontend locks the same pair after a successful start and displays a duplicate warning; after refresh, the backend check still blocks it.
 - Different batches remain startable with the same approved campaign. No migration is needed; the existing partial unique index continues to handle simultaneous start requests. No automated tests run, no live sends, and no push/deployment performed.
+
+## Dashboard history and Human Approval history (2026-11-09)
+- Added recent run selector to Dashboard (last 12 runs) and on-demand details for selected historical runs.
+- Added server-side filters and pagination to review history; did not add audit deletion so review records remain available.
+- Confirmed low-risk messages bypass Human Approval into the sending queue; medium/high risk messages remain review-required. This explains why recent leads can produce an empty review queue.
+- No migration needed. Backend compile and frontend TypeScript check pass. Windows TestClient tests stalled during asyncio Proactor loop creation; no live send or push occurred.

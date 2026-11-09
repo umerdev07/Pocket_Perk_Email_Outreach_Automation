@@ -1,4 +1,5 @@
 from unittest.mock import AsyncMock, patch
+from uuid import uuid4
 
 from fastapi.testclient import TestClient
 
@@ -16,3 +17,14 @@ def test_dashboard_summary_returns_database_totals():
     assert response.status_code == 200
     assert response.json() == expected
     summary.assert_awaited_once()
+
+
+def test_dashboard_can_load_selected_recent_run():
+    run_id = uuid4()
+    expected = {"run_id": str(run_id), "campaign_name": "Test campaign", "status": "completed",
+                "total_leads": 3, "processed": 3, "queued_emails": 1, "sent_emails": 2}
+    with patch("app.routers.dashboard.get_dashboard_run_detail", new=AsyncMock(return_value=expected)) as detail:
+        response = TestClient(create_app(auth_enabled=False)).get(f"/api/dashboard/runs/{run_id}")
+    assert response.status_code == 200
+    assert response.json() == expected
+    detail.assert_awaited_once()

@@ -24,6 +24,7 @@ type HistoryEntry = {
   recipient_email: string | null; campaign_name: string | null; step_number: number | null;
   created_at: string;
 };
+type HistoryPage = { items: HistoryEntry[]; total: number; has_more: boolean; limit: number; offset: number };
 type Props = { apiBase: string; notify: (message: string) => void };
 
 export default function ApprovalQueue({ apiBase, notify }: Props) {
@@ -39,7 +40,15 @@ export default function ApprovalQueue({ apiBase, notify }: Props) {
   const [error, setError] = useState("");
   const [tab, setTab] = useState<"review" | "history">("review");
   const [history, setHistory] = useState<HistoryEntry[]>([]);
+  const [historyTotal, setHistoryTotal] = useState(0);
+  const [historyHasMore, setHistoryHasMore] = useState(false);
   const [historyLoading, setHistoryLoading] = useState(false);
+  const [historySearch, setHistorySearch] = useState("");
+  const [historyCampaign, setHistoryCampaign] = useState("");
+  const [historyAction, setHistoryAction] = useState("");
+  const [historyStatus, setHistoryStatus] = useState("");
+  const [historyRisk, setHistoryRisk] = useState("");
+  const [historyDays, setHistoryDays] = useState("30");
 
   async function loadQueue(offset = 0, append = false) {
     setLoading(!append);
@@ -64,14 +73,26 @@ export default function ApprovalQueue({ apiBase, notify }: Props) {
 
   useEffect(() => { void loadQueue(); /* Load once when the page opens. */ }, []);
 
-  async function loadHistory() {
+  async function loadHistory(offset = 0, append = false, overrides?: {
+    search: string; campaign: string; action: string; status: string; risk_level: string; days: string;
+  }) {
     setHistoryLoading(true);
     setError("");
     try {
-      const response = await apiFetch(`${apiBase}/api/approvals/history?limit=100&offset=0`);
-      const data = await response.json() as HistoryEntry[] & { detail?: string };
+      const filters = overrides || { search: historySearch.trim(), campaign: historyCampaign, action: historyAction,
+        status: historyStatus, risk_level: historyRisk, days: historyDays };
+      const params = new URLSearchParams({ limit: "50", offset: String(offset), days: filters.days });
+      if (filters.search.trim()) params.set("search", filters.search.trim());
+      if (filters.campaign) params.set("campaign", filters.campaign);
+      if (filters.action) params.set("action", filters.action);
+      if (filters.status) params.set("status", filters.status);
+      if (filters.risk_level) params.set("risk_level", filters.risk_level);
+      const response = await apiFetch(`${apiBase}/api/approvals/history?${params}`);
+      const data = await response.json() as HistoryPage & { detail?: string };
       if (!response.ok) throw new Error(data.detail || "Could not load email review history.");
-      setHistory(data);
+      setHistory(current => append ? [...current, ...data.items] : data.items);
+      setHistoryTotal(data.total);
+      setHistoryHasMore(data.has_more);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Could not load email review history.");
     } finally {
@@ -182,20 +203,35 @@ export default function ApprovalQueue({ apiBase, notify }: Props) {
           onClick={() => { setTab("history"); if (!history.length) void loadHistory(); }}>Review history</button>
       </div>
       {error && <p role="alert" className="error">{error}</p>}
-      {tab === "history" ? historyLoading ? <section className="card">Loading review history…</section> : history.length === 0 ? (
-        <section className="card approval-empty"><span>↻</span><h2>No review history yet</h2>
-          <p>Content checks and review decisions will appear here.</p></section>
-      ) : <section className="card review-history-card">
+      {tab === "history" ? <section className="card review-history-card">
         <div className="approval-list-heading"><h2>Recent email checks and decisions</h2>
-          <button className="secondary-button" type="button" disabled={historyLoading} onClick={() => void loadHistory()}>{historyLoading ? "Refreshing…" : "Refresh history"}</button></div>
-        <div className="review-history-list">{history.map(entry => <article className="review-history-item" key={entry.id}>
+          <span>{historyTotal.toLocaleString()} matching records</span>
+          <button className="secondary-button" type="button" disabled={historyLoading} onClick={() => void loadHistory()}>{historyLoading ? "Updating…" : "Apply filters"}</button></div>
+        <div className="review-history-filters">
+          <label>Search<input value={historySearch} placeholder="Business, email, subject…" onChange={event => setHistorySearch(event.target.value)} onKeyDown={event => { if (event.key === "Enter") void loadHistory(); }} /></label>
+          <label>Campaign<input value={historyCampaign} placeholder="Campaign name" onChange={event => setHistoryCampaign(event.target.value)} onKeyDown={event => { if (event.key === "Enter") void loadHistory(); }} /></label>
+          <label>Event<select value={historyAction} onChange={event => setHistoryAction(event.target.value)}><option value="">All events</option>
+            <option value="risk_assessed">Message checked</option><option value="sent_to_review">Sent for review</option><option value="auto_queued">Ready to send</option>
+            <option value="human_approved">Approved</option><option value="human_rejected">Rejected</option><option value="email_edited">Edited</option><option value="risk_rechecked">Checked again</option><option value="status_changed">Status changed</option>
+          </select></label>
+          <label>Outcome<select value={historyStatus} onChange={event => setHistoryStatus(event.target.value)}><option value="">All outcomes</option>
+            <option value="queued">Ready to send</option><option value="pending_review">Needs review</option><option value="approved">Approved</option><option value="rejected">Rejected</option><option value="sent">Sent</option><option value="failed">Failed</option>
+          </select></label>
+          <label>Risk<select value={historyRisk} onChange={event => setHistoryRisk(event.target.value)}><option value="">All risk levels</option><option value="LOW">Low</option><option value="MEDIUM">Medium</option><option value="HIGH">High</option></select></label>
+          <label>Date range<select value={historyDays} onChange={event => setHistoryDays(event.target.value)}><option value="7">Last 7 days</option><option value="30">Last 30 days</option><option value="90">Last 90 days</option><option value="365">Last year</option><option value="0">All time</option></select></label>
+          <button className="link-button" type="button" onClick={() => { setHistorySearch(""); setHistoryCampaign(""); setHistoryAction(""); setHistoryStatus(""); setHistoryRisk(""); setHistoryDays("30");
+            void loadHistory(0, false, { search: "", campaign: "", action: "", status: "", risk_level: "", days: "30" }); }}>Clear filters</button>
+        </div>
+        {historyLoading && history.length === 0 ? <p className="chart-empty">Loading review history…</p> : history.length === 0 ? <div className="approval-empty"><span>↻</span><h2>No matching history</h2><p>Try widening the date range or clearing a filter.</p></div> : <div className="review-history-list">{history.map(entry => <article className="review-history-item" key={entry.id}>
           <div className="review-history-top"><div><b>{entry.business_name || entry.recipient_email || "Email"}</b>
             <small>{entry.campaign_name || "Campaign"} · Email {entry.step_number ?? "—"} · {new Date(entry.created_at).toLocaleString()}</small></div>
             <span className={`risk-badge ${(entry.risk_level || "low").toLowerCase()}`}>{entry.risk_level === "HIGH" ? "Careful review" : entry.risk_level === "MEDIUM" ? "Review suggested" : "Checked"} · {entry.status === "auto_queued" || entry.status === "queued" ? "Ready to send" : entry.status.replaceAll("_", " ")}</span></div>
           <p className="review-history-subject">{entry.subject}</p>
           <small className="review-history-action">{entry.action.replaceAll("_", " ")}</small>
           {entry.risk_reason && <p className="review-history-reason">{userFacingError(entry.risk_reason.replace(/^AI\s+(?:spam[- ]risk|content)\s+check:\s*/i, "Message check: "), "The message was flagged for a quick review.")}</p>}
-        </article>)}</div>
+        </article>)}</div>}
+        {historyHasMore && <button className="secondary-button approval-more" type="button" disabled={historyLoading}
+          onClick={() => void loadHistory(history.length, true)}>{historyLoading ? "Loading…" : `Load more (${history.length} of ${historyTotal})`}</button>}
       </section> : loading && items.length === 0 ? <section className="card">Loading emails for review…</section> : total === 0 ? (
         <section className="card approval-empty"><span>✓</span><h2>No emails need review</h2>
           <p>Emails that need human review will appear here.</p></section>

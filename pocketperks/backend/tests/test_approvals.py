@@ -26,13 +26,20 @@ def test_approval_queue_lists_pending_review_emails():
 
 
 def test_approval_history_returns_saved_automated_and_human_review_events():
-    expected = [{"id": "history-1", "action": "risk_assessed", "status": "queued",
-                 "risk_level": "LOW", "risk_reason": "No obvious content-level spam signals."}]
+    expected = {"items": [{"id": "history-1", "action": "risk_assessed", "status": "queued",
+                           "risk_level": "LOW", "risk_reason": "No obvious content-level spam signals."}],
+                "total": 1, "limit": 10, "offset": 5, "has_more": False}
     with patch("app.routers.approvals.list_review_history", new=AsyncMock(return_value=expected)) as listing:
-        response = client.get("/api/approvals/history?limit=10&offset=5")
+        response = client.get("/api/approvals/history?limit=10&offset=5&search=cafe&campaign=Test&action=risk_assessed&status=queued&risk_level=LOW&days=90")
     assert response.status_code == 200
     assert response.json() == expected
-    assert listing.await_args.kwargs == {"limit": 10, "offset": 5}
+    assert listing.await_args.kwargs == {"limit": 10, "offset": 5, "search": "cafe", "campaign": "Test",
+                                         "action": "risk_assessed", "status": "queued", "risk_level": "LOW", "days": 90}
+
+
+def test_approval_history_rejects_unknown_filter_values():
+    response = client.get("/api/approvals/history?action=delete_all")
+    assert response.status_code == 422
 
 
 def test_edit_rechecks_risk_and_requires_human_approval_again():
