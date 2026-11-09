@@ -577,4 +577,5 @@ Koi fake business data repo mein nahi. Testing ke liye user apni asli (ya sample
 ### Public landing page (2026-11-09)
 - Added a public PocketPerks outreach landing page at `/` with a concise product overview, four workflow stages, reserved demo-video area, FAQs and footer navigation.
 - The existing authenticated application remains available at `/workspace`; `/login` uses the existing Supabase sign-in and routes signed-in users into the workspace. Account and password recovery routes remain behind the same auth gate/flow.
-- No database migration or backend changes are needed. Frontend TypeScript check and production build pass. Deploy the frontend to publish the page; add the approved demo video when ready.
+- Landing copy documents CSV/XLSX import and duplicate/invalid/suppression checks, Claude personalization, risk-based human review, Instantly campaign activation/scheduling, provider-confirmed sends, replies and future-sync suppression. It clarifies invite-only access and avoids promising inbox placement.
+- The public route renders without waiting for session restoration. No database migration or backend changes are needed. Frontend TypeScript check and production build pass. Deploy the frontend to publish the page; add the approved demo video when ready.
