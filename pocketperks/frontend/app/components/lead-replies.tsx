@@ -95,10 +95,10 @@ export default function LeadReplies({ apiBase, canManageSuppressions = false }: 
     try {
       const response = await apiFetch(`${apiBase}/api/lead-replies/sync`, { method: "POST" });
       const data = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(data.detail || "Could not sync replies from Instantly.");
+      if (!response.ok) throw new Error(data.detail || "Could not refresh replies.");
       await loadReplies(false);
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Could not sync replies from Instantly.");
+      setError(cause instanceof Error ? cause.message : "Could not refresh replies.");
     } finally {
       setSyncing(false);
     }
@@ -125,7 +125,7 @@ export default function LeadReplies({ apiBase, canManageSuppressions = false }: 
 
   async function markOptOut(reply: Reply) {
     const address = reply.leads?.email || reply.from_email;
-    if (!window.confirm(`Add ${address} to the global opt-out list? Future imports, personalization and Instantly sync will skip this address.`)) return;
+    if (!window.confirm(`Add ${address} to the do-not-email list? Future imports and campaigns will skip this address.`)) return;
     setOptOutBusy(reply.id);
     setError("");
     setNotice("");
@@ -134,7 +134,7 @@ export default function LeadReplies({ apiBase, canManageSuppressions = false }: 
       const data = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(data.detail || "Could not record the opt-out.");
       setReplies(current => current.map(item => item.id === reply.id ? { ...item, opted_out: true } : item));
-      setNotice(`${data.email || address} was added to the global opt-out list.`);
+      setNotice(`${data.email || address} was added to the do-not-email list.`);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Could not record the opt-out.");
     } finally {
@@ -158,7 +158,7 @@ export default function LeadReplies({ apiBase, canManageSuppressions = false }: 
       setReleaseReplyId("");
       setReleaseReason("");
       setReleaseConsent(false);
-      setNotice(`${address} is re-enabled for future campaigns. It will not be added to an active Instantly campaign.`);
+      setNotice(`${address} is allowed for future campaigns. It will not be added to a campaign that is already running.`);
       await loadReplies(false);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Could not re-enable this address.");
@@ -168,7 +168,7 @@ export default function LeadReplies({ apiBase, canManageSuppressions = false }: 
   }
 
   async function deleteLeadReply(reply: Reply) {
-    if (!window.confirm(`Permanently delete this reply from Instantly Unibox and PocketPerks? The recipient's mailbox copy will not be deleted.`)) return;
+    if (!window.confirm(`Permanently delete this reply from this workspace and the connected inbox? The recipient's mailbox copy will remain.`)) return;
     setDeleteBusy(reply.id);
     setError("");
     setNotice("");
@@ -178,7 +178,7 @@ export default function LeadReplies({ apiBase, canManageSuppressions = false }: 
       if (!response.ok) throw new Error(data.detail || "Could not delete this reply.");
       setReplies(current => current.filter(item => item.id !== reply.id));
       if (openId === reply.id) setOpenId("");
-      setNotice("Reply deleted from Instantly Unibox and PocketPerks.");
+      setNotice("Reply deleted from this workspace and the connected inbox.");
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Could not delete this reply.");
     } finally {
@@ -190,15 +190,15 @@ export default function LeadReplies({ apiBase, canManageSuppressions = false }: 
     const body = (replyDrafts[reply.id] || "").trim();
     if (!body) return;
     setSendReplyBusy(reply.id); setError(""); setNotice("");
-    setReplyFeedback(current => ({ ...current, [reply.id]: { kind: "success", text: "Sending through Instantly…" } }));
+    setReplyFeedback(current => ({ ...current, [reply.id]: { kind: "success", text: "Sending your reply…" } }));
     try {
       const response = await apiFetch(`${apiBase}/api/lead-replies/${reply.id}/reply`, {
         method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ body }),
       });
       const data = await response.json().catch(() => ({}));
-      if (!response.ok) throw new Error(data.detail || "Could not send reply through Instantly.");
+      if (!response.ok) throw new Error(data.detail || "Could not send your reply.");
       setReplyDrafts(current => ({ ...current, [reply.id]: "" }));
-      setReplyFeedback(current => ({ ...current, [reply.id]: { kind: "success", text: "Reply sent through Instantly on the existing email thread." } }));
+      setReplyFeedback(current => ({ ...current, [reply.id]: { kind: "success", text: "Reply sent in the existing email conversation." } }));
     } catch (cause) {
       const message = cause instanceof Error ? cause.message : "Could not send reply.";
       setError(message);
@@ -225,18 +225,18 @@ export default function LeadReplies({ apiBase, canManageSuppressions = false }: 
 
   return (
     <section className="content lead-replies-page" aria-labelledby="replies-heading">
-      <small className="eyebrow">INSTANTLY UNIBOX</small>
+      <small className="eyebrow">EMAIL INBOX</small>
       <div className="title replies-heading">
         <div><h1 id="replies-heading">Lead Replies</h1>
-          <p>Incoming replies synced from Instantly into your PocketPerks workspace.</p></div>
+          <p>Incoming replies from your campaigns, all in one PocketPerks workspace.</p></div>
         <button className="action-button" type="button" disabled={syncing} onClick={() => void refreshReplies()}>
-          {syncing ? "Syncing…" : "↻ Refresh replies"}
+          {syncing ? "Checking for replies…" : "↻ Refresh replies"}
         </button>
       </div>
       <div className="reply-summary">
         <article><small>Replies loaded</small><b>{replies.length}</b></article>
         <article><small>Unread loaded</small><b>{unreadCount}</b></article>
-        <span>Automatic inbox check runs every minute while the backend is online.</span>
+          <span>New replies are checked automatically while the workspace is running.</span>
       </div>
       {error && <p role="alert" className="error">{error}</p>}
       {notice && <p role="status" className="success">{notice}</p>}
@@ -262,8 +262,8 @@ export default function LeadReplies({ apiBase, canManageSuppressions = false }: 
         <div className="reply-results-count">Showing {visibleReplies.length} of {replies.length} loaded replies</div>
         {loading ? <p className="reply-empty">Loading replies…</p> : visibleReplies.length === 0 ? (
           <div className="reply-empty"><span>↩</span><h2>{replies.length ? "No replies match these filters" : "No replies yet"}</h2>
-            <p>{replies.length ? "Try a different search or show all replies." : "Replies to your Instantly campaign will appear here after the next sync."}</p>
-            {!replies.length && <button type="button" className="secondary-button" disabled={syncing} onClick={() => void refreshReplies()}>{syncing ? "Checking…" : "Check Instantly now"}</button>}
+            <p>{replies.length ? "Try a different search or show all replies." : "Replies to your campaigns will appear here when they arrive."}</p>
+            {!replies.length && <button type="button" className="secondary-button" disabled={syncing} onClick={() => void refreshReplies()}>{syncing ? "Checking…" : "Check for replies"}</button>}
           </div>
         ) : <><div className="reply-list">{visibleReplies.map(reply => {
           const expanded = openId === reply.id;
@@ -278,14 +278,14 @@ export default function LeadReplies({ apiBase, canManageSuppressions = false }: 
                 <small>{reply.from_email}{reply.campaigns?.name ? ` · ${reply.campaigns.name}` : ""}</small>
                 <strong>{reply.subject || "(no subject)"}</strong>
                 <span>{(cleanBody || "No new text detected; quoted email available below.").replace(/\s+/g, " ").slice(0, 180)}</span>
-                {reply.opted_out && <small className="reply-opt-out-badge">Suppressed · future campaign sync blocked</small>}</span>
+                {reply.opted_out && <small className="reply-opt-out-badge">Opted out · future campaigns blocked</small>}</span>
               <time dateTime={reply.received_at}>{new Date(reply.received_at).toLocaleString()}</time>
             </button>
             {expanded && <div className="reply-expanded"><div className="reply-meta"><span>From <b>{reply.from_email}</b></span>
               {reply.leads?.email && <span>Lead <b>{reply.leads.email}</b></span>}{reply.campaigns?.name && <span>Campaign <b>{reply.campaigns.name}</b></span>}
-            </div>{reply.opted_out && <p className="reply-opt-out-badge">On global opt-out list · future campaign sync is blocked</p>}<h3>{reply.subject || "(no subject)"}</h3><div className="reply-body-card"><p>{cleanBody || "No new reply text was detected."}</p></div>
+            </div>{reply.opted_out && <p className="reply-opt-out-badge">Opted out · future campaigns are blocked</p>}<h3>{reply.subject || "(no subject)"}</h3><div className="reply-body-card"><p>{cleanBody || "No new reply text was detected."}</p></div>
               {!reply.opted_out && <form className="reply-compose" onSubmit={event => { event.preventDefault(); void sendReply(reply); }}>
-                <label htmlFor={`reply-compose-${reply.id}`}>Reply via Instantly</label>
+                <label htmlFor={`reply-compose-${reply.id}`}>Reply in this conversation</label>
                 <textarea id={`reply-compose-${reply.id}`} rows={4} maxLength={20000} value={replyDrafts[reply.id] || ""}
                   onChange={event => setReplyDrafts(current => ({ ...current, [reply.id]: event.target.value }))}
                   placeholder="Write a reply to this email thread…" disabled={sendReplyBusy === reply.id}/>
@@ -295,7 +295,7 @@ export default function LeadReplies({ apiBase, canManageSuppressions = false }: 
                 {replyFeedback[reply.id] && <p role={replyFeedback[reply.id].kind === "error" ? "alert" : "status"}
                   className={replyFeedback[reply.id].kind === "error" ? "error" : "success"}>{replyFeedback[reply.id].text}</p>}
               </form>}
-              <div className="reply-actions"><button type="button" className="secondary-button reply-delete-button" disabled={deleteBusy === reply.id} onClick={() => void deleteLeadReply(reply)} aria-label="Delete reply from Instantly and PocketPerks"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M10 11v6m4-6v6M6 7l1 13h10l1-13M9 7V4h6v3"/></svg>{deleteBusy === reply.id ? "Deleting…" : "Delete reply"}</button>
+              <div className="reply-actions"><button type="button" className="secondary-button reply-delete-button" disabled={deleteBusy === reply.id} onClick={() => void deleteLeadReply(reply)} aria-label="Delete reply from this workspace and connected inbox"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M10 11v6m4-6v6M6 7l1 13h10l-1-13M9 7V4h6v3"/></svg>{deleteBusy === reply.id ? "Deleting…" : "Delete reply"}</button>
                 <button type="button" className="secondary-button" disabled={reply.opted_out || optOutBusy === reply.id} onClick={() => void markOptOut(reply)}>{reply.opted_out ? "Opt-out recorded" : optOutBusy === reply.id ? "Saving opt-out…" : "Mark as opt-out"}</button>
                 {canManageSuppressions && reply.opted_out && <button type="button" className="secondary-button" disabled={releaseBusy === reply.id} onClick={() => {
                   setReleaseReplyId(current => current === reply.id ? "" : reply.id);
@@ -303,7 +303,7 @@ export default function LeadReplies({ apiBase, canManageSuppressions = false }: 
                 }}>{releaseBusy === reply.id ? "Re-enabling…" : releaseReplyId === reply.id ? "Cancel re-enable" : "Re-enable for future campaigns"}</button>}</div>
               {canManageSuppressions && releaseReplyId === reply.id && <form className="suppression-release-form reply-release-form" onSubmit={event => { event.preventDefault(); void releaseOptOut(reply); }}>
                 <h3>Re-enable {reply.leads?.email || reply.from_email}</h3>
-                <p>Only continue if the recipient explicitly asked to receive PocketPerks emails again. This removes the global suppression; it does not change an active Instantly campaign.</p>
+                <p>Only continue if the recipient explicitly asked to receive PocketPerks emails again. This allows future campaigns, but does not change a campaign that is already running.</p>
                 <label>Audit reason<textarea required minLength={10} maxLength={300} value={releaseReason} onChange={event => setReleaseReason(event.target.value)} placeholder="How and when did the recipient confirm re-subscription?" rows={2}/></label>
                 <label className="suppression-consent"><input type="checkbox" checked={releaseConsent} onChange={event => setReleaseConsent(event.target.checked)}/>
                   The recipient explicitly requested to receive PocketPerks emails again.</label>
@@ -314,7 +314,7 @@ export default function LeadReplies({ apiBase, canManageSuppressions = false }: 
           </article>;
         })}</div>{hasMore && !search && <div className="reply-load-more"><button className="secondary-button" type="button" disabled={loadingMore} onClick={() => void loadMore()}>{loadingMore ? "Loading…" : "Load more replies"}</button></div>}</>}
       </section>
-      <p className="reply-note">“Unread” is tracked in PocketPerks. It does not change read status in Instantly Unibox.</p>
+      <p className="reply-note">Read status here is tracked in PocketPerks and does not change the original mailbox status.</p>
     </section>
   );
 }

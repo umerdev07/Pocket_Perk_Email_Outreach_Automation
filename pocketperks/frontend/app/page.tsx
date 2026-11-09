@@ -2,25 +2,25 @@ const stages = [
   {
     number: "01",
     title: "Prepare your campaign",
-    description: "Import a CSV or Excel lead list. Duplicate, invalid and suppressed addresses are checked before campaign work begins.",
+    description: "Import a CSV or Excel lead list. Duplicate, invalid and opted-out addresses are checked before campaign work begins.",
     icon: "✳",
   },
   {
     number: "02",
     title: "Personalize and review",
-    description: "Claude prepares a draft for each lead. Content-risk checks hold messages that need a human review before they can proceed.",
+    description: "A draft is prepared for each lead. Content checks hold messages that need a human review before they can proceed.",
     icon: "✎",
   },
   {
     number: "03",
     title: "Send with control",
-    description: "Sync eligible leads to selected Instantly inboxes. Once active, the campaign follows its sending window and follow-up delays.",
+    description: "Add eligible leads to your selected sending inboxes. Once active, the campaign follows its sending window and follow-up delays.",
     icon: "↗",
   },
   {
     number: "04",
     title: "Manage every reply",
-    description: "See replies in one inbox, respond on the existing thread, and record opt-outs to block future imports and syncs.",
+    description: "See replies in one inbox, respond on the existing thread, and record opt-outs to block future imports and future campaigns.",
     icon: "↩",
   },
 ];
@@ -28,7 +28,7 @@ const stages = [
 const faqs = [
   {
     question: "Does PocketPerks send messages without review?",
-    answer: "Claude creates personalized drafts. Content-risk checks hold messages that need a human review; eligible messages proceed to the campaign workflow. Sending follows the campaign's launch state and schedule in Instantly.",
+    answer: "Personalized drafts are prepared for each lead. Content checks hold messages that need a human review; eligible messages proceed to the campaign process. Sending follows the campaign's start state and schedule.",
   },
   {
     question: "Can I work with different kinds of local businesses?",
@@ -36,15 +36,15 @@ const faqs = [
   },
   {
     question: "Where do replies and opt-outs go?",
-    answer: "Replies sync into Lead Replies, where you can respond through the existing Instantly thread. Opt-outs are recorded in the suppression list and block future imports, personalization and Instantly syncs for that address.",
+    answer: "Replies appear in Lead Replies, where you can respond in the existing email conversation. Opt-outs are recorded in the do-not-email list and block future imports and campaigns for that address.",
   },
   {
     question: "When are campaign emails sent?",
-    answer: "Eligible leads are sent by Instantly only when the campaign is active, during its configured sending hours and days. Follow-ups use the saved step delay; a draft or paused campaign does not send.",
+    answer: "Eligible leads are sent only when the campaign is active, during its configured sending hours and days. Follow-ups use the saved delay; a draft or paused campaign does not send.",
   },
   {
     question: "Does the system guarantee inbox delivery?",
-    answer: "No. PocketPerks tracks Instantly-confirmed sends and provides copy and opt-out controls, but inbox placement also depends on sender and domain reputation, email authentication, recipient behavior and mailbox provider filters.",
+    answer: "No. PocketPerks records confirmed sends and provides message and opt-out controls, but inbox placement also depends on sender and domain reputation, the sender's email setup, recipient behavior and mailbox filters.",
   },
   {
     question: "Can anyone create a workspace account?",
@@ -76,14 +76,14 @@ export default function LandingPage() {
         <div className="landing-hero-copy">
           <div className="landing-eyebrow"><span /> POCKETPERKS OUTREACH</div>
           <h1>Good local relationships start with a <em>thoughtful hello.</em></h1>
-          <p>Import your lead list, prepare personalized emails with Claude, review flagged drafts, and manage Instantly sending and replies in one workspace.</p>
+          <p>Import your lead list, prepare personalized emails, review flagged drafts, and manage sending and replies in one workspace.</p>
           <div className="landing-hero-actions">
             <a className="landing-primary" href="/login">Sign in to your workspace <span aria-hidden="true">→</span></a>
             <a className="landing-text-link" href="#how-it-works">See how it works <span aria-hidden="true">↓</span></a>
           </div>
           <div className="landing-trust-line"><span className="landing-check">✓</span> Built around human review and clear sending controls</div>
         </div>
-        <div className="landing-hero-art" aria-label="Campaign workflow preview">
+        <div className="landing-hero-art" aria-label="Campaign process preview">
           <div className="landing-orbit landing-orbit-one" />
           <div className="landing-orbit landing-orbit-two" />
           <div className="landing-art-spark spark-one">✳</div>
@@ -94,23 +94,23 @@ export default function LandingPage() {
             <div className="landing-preview-subtitle">A clear path from first draft to reply</div>
             <div className="landing-preview-flow">
               <div className="preview-flow-row"><span className="preview-flow-icon mint">✳</span><span><b>Personalized drafts</b><small>Ready for a human review</small></span><i>✓</i></div>
-              <div className="preview-flow-row"><span className="preview-flow-icon lilac">↗</span><span><b>Sending schedule</b><small>Managed through Instantly</small></span><i>✓</i></div>
+              <div className="preview-flow-row"><span className="preview-flow-icon lilac">↗</span><span><b>Sending schedule</b><small>Managed in your workspace</small></span><i>✓</i></div>
               <div className="preview-flow-row"><span className="preview-flow-icon peach">↩</span><span><b>Replies in one place</b><small>Follow up with context</small></span><i className="preview-live">LIVE</i></div>
             </div>
-            <div className="landing-preview-footer"><span><b /> Your workflow, at a glance</span><span>01 — 04</span></div>
+            <div className="landing-preview-footer"><span><b /> Your process, at a glance</span><span>01 — 04</span></div>
           </div>
           <div className="landing-float-note"><span>✦</span><div><b>Every message has context</b><small>Relevant to the business</small></div></div>
         </div>
-        <div className="landing-hero-bottom"><span>CAMPAIGN</span><i /> <span>PERSONALIZATION</span><i /> <span>REPLIES</span><span className="landing-hero-caption">A considered way to introduce PocketPerks</span></div>
+        <div className="landing-hero-bottom"><span>CAMPAIGN</span><i /> <span>TAILORED EMAILS</span><i /> <span>REPLIES</span><span className="landing-hero-caption">A considered way to introduce PocketPerks</span></div>
       </section>
 
       <section className="landing-intro" aria-label="Product summary">
         <div><span className="landing-section-kicker">ONE CONNECTED WORKSPACE</span><h2>From a good first draft to a clear next step.</h2></div>
-        <p>PocketPerks brings CSV and Excel lead imports, campaign planning, Claude-powered personalization, risk-based review, Instantly sending and reply management into one straightforward process.</p>
+        <p>PocketPerks brings CSV and Excel lead imports, campaign planning, personalized email preparation, content review, scheduled sending and reply management into one straightforward process.</p>
       </section>
 
       <section className="landing-stages" id="how-it-works">
-        <div className="landing-section-heading"><div><span className="landing-section-kicker">HOW IT WORKS</span><h2>Four clear stages.<br /><em>One smooth workflow.</em></h2></div><p>From importing business leads to managing a real reply, with sending controls and suppression checks along the way.</p></div>
+        <div className="landing-section-heading"><div><span className="landing-section-kicker">HOW IT WORKS</span><h2>Four clear stages.<br /><em>One smooth process.</em></h2></div><p>From importing business leads to managing a real reply, with sending controls and do-not-email checks along the way.</p></div>
         <div className="landing-stage-grid">
           {stages.map((stage) => <article className="landing-stage-card" key={stage.number}>
             <div className="landing-stage-top"><span>{stage.number}</span><i>{stage.icon}</i></div>
@@ -124,12 +124,12 @@ export default function LandingPage() {
       <section className="landing-demo" id="demo">
         <div className="landing-demo-copy"><span className="landing-section-kicker">TAKE A LOOK AROUND</span><h2>A quick tour,<br /><em>coming into view.</em></h2><p>See how a campaign moves through PocketPerks—from planning and review to replies and opt-outs.</p><a className="landing-demo-login" href="/login">Open the workspace <span aria-hidden="true">→</span></a></div>
         <div className="landing-video-placeholder" aria-label="Reserved space for the PocketPerks demo video">
-          <div className="landing-video-frame"><div className="landing-video-glow" /><span className="landing-play" aria-hidden="true">▶</span><div className="landing-video-label"><span>PRODUCT WALKTHROUGH</span><b>Demo video will appear here</b><small>Campaigns · Email review · Instantly · Replies</small></div><div className="landing-video-corner">PP / 01</div></div>
+          <div className="landing-video-frame"><div className="landing-video-glow" /><span className="landing-play" aria-hidden="true">▶</span><div className="landing-video-label"><span>PRODUCT WALKTHROUGH</span><b>Demo video will appear here</b><small>Campaigns · Email review · Sending · Replies</small></div><div className="landing-video-corner">PP / 01</div></div>
         </div>
       </section>
 
       <section className="landing-faq" id="faq">
-        <div className="landing-faq-heading"><span className="landing-section-kicker">GOOD TO KNOW</span><h2>Questions, <em>answered.</em></h2><p>A few useful details about the PocketPerks outreach workflow.</p></div>
+        <div className="landing-faq-heading"><span className="landing-section-kicker">GOOD TO KNOW</span><h2>Questions, <em>answered.</em></h2><p>A few useful details about the PocketPerks outreach process.</p></div>
         <div className="landing-faq-list">{faqs.map((faq) => <details key={faq.question}><summary>{faq.question}<span>+</span></summary><p>{faq.answer}</p></details>)}</div>
       </section>
 

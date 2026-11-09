@@ -17,9 +17,8 @@ export default function ResetPasswordPage() {
     const fragment = new URLSearchParams(url.hash.replace(/^#/, ""));
     const token = fragment.get("access_token") || url.searchParams.get("access_token") || "";
     const type = fragment.get("type") || url.searchParams.get("type") || "";
-    const linkError = fragment.get("error_description") || url.searchParams.get("error_description");
     if (token && type === "recovery") setAccessToken(token);
-    else setError(linkError || "This password reset link is invalid or expired. Request a new link from the sign-in page.");
+    else setError("This password reset link is invalid or expired. Request a new link from the sign-in page.");
     window.history.replaceState(null, "", window.location.pathname);
   }, []);
 

@@ -43,7 +43,7 @@ export default function AccountSettingsPage() {
       <label>New email address<input type="email" autoComplete="email" required value={email} onChange={event => setEmail(event.target.value)} /></label>
       <button className="action-button" disabled={busy}>{busy ? "Sending confirmation…" : "Send confirmation links"}</button>
     </form>}
-    <div className="auth-card-foot"><span className="auth-lock">⌑</span><small>For security, Supabase may ask you to confirm the change from both your current and new email inboxes. Your password is not changed.</small></div>
+    <div className="auth-card-foot"><span className="auth-lock">⌑</span><small>For security, you may need to confirm the change from both your current and new email inboxes. Your password is not changed.</small></div>
     <Link className="auth-reset-link account-back-link" href="/">Back to PocketPerks</Link>
   </section></AuthFrame>;
 }

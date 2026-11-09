@@ -1,6 +1,7 @@
 "use client";
 
 import { apiFetch } from "../../lib/auth";
+import { userFacingError } from "../../lib/api";
 
 import { useEffect, useRef, useState } from "react";
 
@@ -126,7 +127,7 @@ export default function BatchDetailsPanel({ apiBase, batch, onStart }: { apiBase
           <label>To<input type="email" value={emailsByLead[expandedLead].lead.email || "Recipient email unavailable"} readOnly/></label>
           <label>Subject<input value={email.subject} onChange={event => changeEmail(expandedLead, email.id, "subject", event.target.value)}/></label>
           <label>Body<textarea rows={8} value={email.body} onChange={event => changeEmail(expandedLead, email.id, "body", event.target.value)}/></label>
-          {email.risk_reason && <small className="batch-email-risk">Risk: {email.risk_level || "unknown"} · {email.risk_reason}</small>}
+          {email.risk_reason && <small className="batch-email-risk">Review note: {userFacingError(email.risk_reason.replace(/^AI\s+(?:spam[- ]risk|content)\s+check:\s*/i, "Message check: "), "This message may need a quick review.")}</small>}
           <div className="batch-email-save"><button className="action-button" disabled={!!savingId} onClick={() => void saveEmail(expandedLead, email)}>{savingId === email.id ? "Saving…" : "Save changes"}</button></div>
         </article>)}</div>}
         {savedMessage && <p className="batch-saved-message" role="status">✓ {savedMessage}</p>}

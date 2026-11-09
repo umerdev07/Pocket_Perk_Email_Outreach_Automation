@@ -23,9 +23,11 @@ def test_campaign_payload_uses_uk_dates_and_keeps_provider_campaign_inactive():
     assert payload["campaign_schedule"]["start_date"] == "2026-11-05"
     assert payload["campaign_schedule"]["end_date"] == "2026-11-05"
     assert payload["campaign_schedule"]["schedules"][0]["timezone"] == "Europe/London"
-    assert payload["sequences"][0]["steps"][0]["delay"] == 0
-    assert payload["sequences"][0]["steps"][1]["delay"] == 4
-    assert payload["sequences"][0]["steps"][1]["delay_unit"] == "hours"
+    # A step's saved wait is applied after the previous email in the provider sequence.
+    assert payload["sequences"][0]["steps"][0]["delay"] == 3
+    assert payload["sequences"][0]["steps"][0]["delay_unit"] == "days"
+    assert payload["sequences"][0]["steps"][1]["delay"] == 0
+    assert payload["sequences"][0]["steps"][1]["delay_unit"] == "days"
     assert "status" not in payload
     assert "activate" not in payload
 
@@ -62,5 +64,6 @@ def test_lead_payload_maps_reviewed_personalized_email_variables():
     assert result["email"] == "owner@example.co.uk"
     assert result["custom_variables"] == {
         "pp_email_1_subject": "Hello Example Cafe",
-        "pp_email_1_body": "A short intro.\n\nTo stop future PocketPerks emails, reply STOP.",
+        "pp_email_1_body": "A short intro.\n\nBest,\nThe PocketPerks Team\nPocketPerks | VenturesSky Ltd\nhttps://pocketperks.co.uk\n\nIf you would rather not hear from us, just reply 'no thanks'.",
+        "pp_business_name": "Example Cafe",
     }

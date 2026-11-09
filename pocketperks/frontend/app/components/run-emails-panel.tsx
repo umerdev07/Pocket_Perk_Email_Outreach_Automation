@@ -1,6 +1,7 @@
 "use client";
 
 import { apiFetch } from "../../lib/auth";
+import { userFacingError } from "../../lib/api";
 
 import { useEffect, useMemo, useState } from "react";
 
@@ -169,7 +170,7 @@ export default function RunEmailsPanel({ apiBase, runId, processed, status, onGe
       if (!response.ok) throw new Error(data.detail || "Could not send the conversation follow-up.");
       setSelectedLead(current => current ? ({ ...current, items: current.items.map(item => item.id === email.id ? { ...item, status: "sent", manual_send_state: "sent" } : item) }) : current);
       setItems(current => current.map(item => item.id === email.id ? { ...item, status: "sent", manual_send_state: "sent" } : item));
-      setToast("Conversation follow-up sent in the existing Instantly thread.");
+      setToast("Conversation follow-up sent in the existing email conversation.");
     } catch (cause) {
       setDetailError(cause instanceof Error ? cause.message : "Could not send the conversation follow-up.");
     } finally {
@@ -182,7 +183,7 @@ export default function RunEmailsPanel({ apiBase, runId, processed, status, onGe
       <section className="run-emails card" aria-label="Personalized emails">
         <div className="run-emails-heading">
           <div><h3>Personalized emails <span>{total}</span></h3><p>Generated email drafts · not sent</p></div>
-          {status === "running" && <small>Updating as leads finish…</small>}
+          {status === "running" && <small>Updating as emails are prepared…</small>}
         </div>
         {error && <p role="alert" className="error">{error}</p>}
         {busy && items.length === 0 ? <p>Loading personalized emails…</p> : leads.length === 0 ? (
@@ -210,20 +211,20 @@ export default function RunEmailsPanel({ apiBase, runId, processed, status, onGe
           {detailBusy ? <div className="card">Loading this lead’s emails…</div> : detailError && !selectedLead ? <p role="alert" className="error">{detailError}</p> : selectedLead && <>
             <small className="eyebrow">LEAD EMAILS</small>
             <div className="personalized-lead-title"><div><h1>{selectedLead.lead.business_name || "Personalized emails"}</h1><p>{[selectedLead.lead.business_category, selectedLead.lead.city, selectedLead.lead.email].filter(Boolean).join(" · ")}</p></div><span className="badge generated">{selectedLead.items.length} email{selectedLead.items.length === 1 ? "" : "s"}</span></div>
-            <p className="personalized-notice">These are personalized drafts. Saving changes rechecks the email; an after-conversation step is never sent by its timer and needs an explicit visit/conversation confirmation.</p>
+            <p className="personalized-notice">These are personalized drafts. Saving changes checks the email again. A follow-up after a visit or conversation is sent only after you confirm it happened.</p>
             {detailError && <p role="alert" className="error">{detailError}</p>}
             {toast && <p role="status" className="personalized-saved">✓ {toast}</p>}
             {selectedLead.items.map(email => <article className="card personalized-email-card" key={email.id}>
-              <div className="personalized-email-card-head"><div><small className="eyebrow">EMAIL {email.step?.step_number ?? "—"}</small><h2>Email {email.step?.step_number ?? ""}</h2></div><span className={`badge ${email.status}`}>{email.status.replaceAll("_", " ")}</span></div>
+              <div className="personalized-email-card-head"><div><small className="eyebrow">EMAIL {email.step?.step_number ?? "—"}</small><h2>Email {email.step?.step_number ?? ""}</h2></div><span className={`badge ${email.status}`}>{{ queued: "Waiting to send", pending_review: "Needs review", generated: "Draft ready", sent_test: "Test sent", failed: "Could not send" }[email.status] || email.status.replaceAll("_", " ")}</span></div>
               {email.step?.context && <p className="personalized-email-context">{email.step.context}</p>}
               <label className="personalized-field">To<input type="email" value={selectedLead.lead.email || "Recipient email unavailable"} readOnly /></label>
               <label className="personalized-field">Subject<input value={email.subject} onChange={event => changeEmail(email.id, "subject", event.target.value)} maxLength={500} /></label>
               <label className="personalized-field">Body<textarea rows={10} value={email.body} onChange={event => changeEmail(email.id, "body", event.target.value)} maxLength={20000} /></label>
-              {email.risk_reason && <small className="personalized-risk">Current risk: {email.risk_level || "unknown"} · {email.risk_reason}</small>}
+              {email.risk_reason && <small className="personalized-risk">Review note: {userFacingError(email.risk_reason.replace(/^AI\s+(?:spam[- ]risk|content)\s+check:\s*/i, "Message check: "), "This message may need a quick review.")}</small>}
               <div className="personalized-save-row"><button type="button" className="action-button" disabled={!!savingId} onClick={() => void saveEmail(email)}>{savingId === email.id ? "Saving…" : "Save changes"}</button></div>
               {email.step?.trigger_type === "after_conversation" && <div className="manual-conversation-send">
-                <p>This email is excluded from the timed Instantly sequence. Send it only after you confirm a real visit or conversation.</p>
-                {email.manual_send_state === "unknown" || email.manual_send_state === "sending" ? <p role="status">Send outcome needs reconciliation in Instantly before retrying.</p> : email.status === "sent" ? <p role="status">Sent in the existing Instantly thread.</p> : <>
+                <p>This email is excluded from the scheduled sequence. Send it only after you confirm a real visit or conversation.</p>
+                {email.manual_send_state === "unknown" || email.manual_send_state === "sending" ? <p role="status">We are checking whether this message was sent. Please wait before trying again.</p> : email.status === "sent" ? <p role="status">Sent in the existing email conversation.</p> : <>
                   <label><input type="checkbox" checked={!!conversationConfirmed[email.id]} onChange={event => setConversationConfirmed(current => ({ ...current, [email.id]: event.target.checked }))} /> I confirm a visit or conversation took place with this lead.</label>
                   <button type="button" className="action-button" disabled={!conversationConfirmed[email.id] || !!manualSendingId || email.status !== "approved"} onClick={() => void sendConversationFollowup(email)}>{manualSendingId === email.id ? "Sending…" : "Send after confirmed conversation"}</button>
                   {email.status !== "approved" && <small>Review this email first in Human Approval.</small>}

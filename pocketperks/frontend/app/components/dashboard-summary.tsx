@@ -77,10 +77,10 @@ export default function DashboardSummary({ apiBase, refreshKey, onNavigate }: Pr
     { label: "Total leads", value: summary.total_leads, hint: "Imported and available", tone: "violet" },
     { label: "Campaigns", value: summary.total_campaigns, hint: `${summary.approved_campaigns} approved`, tone: "blue" },
     { label: "Needs approval", value: summary.pending_approvals, hint: "Human review required", tone: "amber" },
-    { label: "Queued · not confirmed sent", value: summary.queued_not_sent, hint: "Waiting for Instantly status sync", tone: "amber" },
-    { label: "Personalization runs", value: summary.active_runs, hint: "Currently processing", tone: "blue" },
-    { label: "Instantly campaigns", value: summary.instantly_campaigns, hint: summary.instantly_auto_launch_enabled ? `${summary.instantly_active_campaigns} active · auto launch enabled` : "Draft sync only · auto launch is off", tone: "violet" },
-    { label: "Leads synced to Instantly", value: summary.instantly_leads_synced, hint: "Provider lead records", tone: "green" },
+    { label: "Waiting to send", value: summary.queued_not_sent, hint: "No delivery confirmation yet", tone: "amber" },
+    { label: "Emails being prepared", value: summary.active_runs, hint: "Currently processing", tone: "blue" },
+    { label: "Sending campaigns", value: summary.instantly_campaigns, hint: summary.instantly_auto_launch_enabled ? `${summary.instantly_active_campaigns} active · automatic start on` : "Draft preparation only · automatic start is off", tone: "violet" },
+    { label: "Leads added to campaigns", value: summary.instantly_leads_synced, hint: "Ready for scheduled sending", tone: "green" },
     { label: "Lead replies", value: summary.total_replies, hint: `${summary.unread_replies} unread in PocketPerks`, tone: "amber" },
   ] : [];
   const activity = summary?.activity;
@@ -108,7 +108,13 @@ export default function DashboardSummary({ apiBase, refreshKey, onNavigate }: Pr
     ringOffset += length;
     return segment;
   });
-  const formatStatus = (value: string) => value.replace(/_/g, " ").replace(/^./, letter => letter.toUpperCase());
+  const formatStatus = (value: string) => ({
+    queued: "Waiting to send",
+    pending_review: "Needs review",
+    generated: "Draft ready",
+    sent_test: "Test sent",
+    failed: "Could not send",
+  }[value] || value.replace(/_/g, " ").replace(/^./, letter => letter.toUpperCase()));
 
   return (
     <section className="dashboard-summary" aria-labelledby="dashboard-heading">
@@ -130,13 +136,13 @@ export default function DashboardSummary({ apiBase, refreshKey, onNavigate }: Pr
       </div>
       {summary?.latest_run && <article className="dashboard-chart-card latest-run-card">
         <div className="dashboard-chart-heading"><div>
-          <h3>Latest campaign run</h3>
+          <h3>Latest campaign activity</h3>
           <p>{summary.latest_run.campaign_name} · {new Date(summary.latest_run.created_at).toLocaleString()}</p>
         </div><span className={`badge ${summary.latest_run.status}`}>{formatStatus(summary.latest_run.status)}</span></div>
         <div className="latest-run-metrics">
           <div><small>Leads processed</small><b>{summary.latest_run.processed} / {summary.latest_run.total_leads}</b></div>
-          <div><small>Queued for Instantly</small><b>{summary.latest_run.queued_emails}</b></div>
-          <div><small>Provider-confirmed sent</small><b>{summary.latest_run.sent_emails}</b></div>
+          <div><small>Waiting to send</small><b>{summary.latest_run.queued_emails}</b></div>
+          <div><small>Confirmed sent</small><b>{summary.latest_run.sent_emails}</b></div>
           <div><small>Needs review</small><b>{summary.latest_run.pending_review_emails}</b></div>
           {summary.latest_run.failed_emails + summary.latest_run.failed_leads > 0 &&
             <div className="latest-run-warning"><small>Failed</small><b>{summary.latest_run.failed_emails + summary.latest_run.failed_leads}</b></div>}
@@ -149,7 +155,7 @@ export default function DashboardSummary({ apiBase, refreshKey, onNavigate }: Pr
             <label className="chart-period-select"><span>Range</span><select aria-label="Workspace activity date range" value={activityDays} onChange={event => setActivityDays(Number(event.target.value))}>
               <option value={7}>7 days</option><option value={14}>14 days</option><option value={30}>30 days</option><option value={90}>90 days</option>
             </select></label></div>
-          {activity?.available === false ? <p className="chart-empty">Apply migration 018 to enable activity charts.</p> : <>
+          {activity?.available === false ? <p className="chart-empty">Activity charts are temporarily unavailable.</p> : <>
             <svg className="activity-chart" viewBox="0 0 720 210" role="img" aria-label="Daily imported leads and received replies over the last 14 days">
               {[0, 0.5, 1].map(fraction => {
                 const y = plot.top + plot.height * fraction;
@@ -168,8 +174,8 @@ export default function DashboardSummary({ apiBase, refreshKey, onNavigate }: Pr
           </>}
         </article>
         <article className="dashboard-chart-card status-chart-card">
-          <div className="dashboard-chart-heading"><div><h3>Email delivery status</h3><p>Provider-confirmed sends and remaining work</p></div></div>
-          {activity?.available === false ? <p className="chart-empty">Apply migration 018 to enable workflow charts.</p> : emailStatusTotal === 0 ? <p className="chart-empty">Personalized email activity will appear here.</p> : <div className="email-status-chart">
+          <div className="dashboard-chart-heading"><div><h3>Email delivery status</h3><p>Confirmed sends and remaining work</p></div></div>
+          {activity?.available === false ? <p className="chart-empty">Email status details are temporarily unavailable.</p> : emailStatusTotal === 0 ? <p className="chart-empty">Personalized email activity will appear here.</p> : <div className="email-status-chart">
             <div className="email-donut-wrap"><svg className="email-status-donut" viewBox="0 0 120 120" role="img" aria-label={`${emailStatusTotal} personalized emails by status`}>
               <circle cx="60" cy="60" r="42" stroke="#edf1ee"/>
               {ringSegments.map(item => <circle key={item.status} cx="60" cy="60" r="42" stroke={item.color}

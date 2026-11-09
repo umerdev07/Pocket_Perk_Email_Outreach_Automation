@@ -32,7 +32,7 @@ export default function AuthGate({ children }: { children: React.ReactNode }) {
     if (!_session) { setUser(null); return; }
     const response = await apiFetch(`${(process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000").replace(/\/$/, "")}/api/auth/me`);
     const data = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(data.detail || "Could not verify workspace access.");
+    if (!response.ok) throw new Error("We couldn't verify your workspace access. Please sign in again or contact your workspace admin.");
     setUser(data as WorkspaceUser);
   }
 
@@ -100,7 +100,7 @@ export default function AuthGate({ children }: { children: React.ReactNode }) {
       <button className="action-button" disabled={busy}>{busy ? "Signing in…" : "Sign in"}</button>
     </form>
     <button className="auth-reset-link" type="button" disabled={!email.trim() || recoveryBusy} onClick={()=>void sendRecoveryLink()}>{recoveryBusy ? "Sending reset link…" : "Forgot password? Send a reset link"}</button>
-    {recoverySent && <p className="auth-success" role="status">If that account exists, Supabase has sent a password reset link to its email.</p>}
+    {recoverySent && <p className="auth-success" role="status">If that account exists, a password reset link has been sent to its email.</p>}
     <div className="auth-card-foot"><span className="auth-lock">⌑</span><small>Invite-only access. Need an account? Ask your workspace admin.</small></div>
   </section></AuthFrame>;
 }

@@ -1,3 +1,5 @@
+import { hideTechnicalErrorDetails, userFacingError } from "./api";
+
 export type WorkspaceRole = "admin" | "operator" | "reviewer";
 
 export type AuthSession = {
@@ -13,8 +15,18 @@ let refreshInProgress: Promise<AuthSession | null> | null = null;
 function authConfig() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL?.replace(/\/$/, "");
   const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-  if (!url || !key) throw new Error("Set the Supabase URL and publishable key in frontend/.env.local.");
+  if (!url || !key) throw new Error("Sign-in is temporarily unavailable. Please contact your workspace admin.");
   return { url, key };
+}
+
+function safeAuthError(data: Record<string, unknown>, fallback: string) {
+  const detail = [data.msg, data.message, data.error_description]
+    .find((value): value is string => typeof value === "string")?.toLowerCase() || "";
+  if (detail.includes("invalid login credentials")) return "That email and password do not match. Please try again.";
+  if (detail.includes("email not confirmed")) return "Please confirm your email address before signing in.";
+  if (detail.includes("already registered") || detail.includes("already exists")) return "That email address is already in use.";
+  if (detail.includes("password") && detail.includes("short")) return "Choose a longer password and try again.";
+  return fallback;
 }
 
 function getStoredSession(): AuthSession | null {
@@ -45,12 +57,11 @@ async function authRequest(path: string, body: Record<string, string>, token?: s
       body: JSON.stringify(body),
     });
   } catch {
-    throw new Error("Could not connect to Supabase Auth. Check the project URL, internet access, and browser connection.");
+    throw new Error("We couldn't connect to sign-in. Check your internet connection and try again.");
   }
   const data = await response.json().catch(() => ({}));
   if (!response.ok) {
-    const message = typeof data.msg === "string" ? data.msg : typeof data.message === "string" ? data.message : "Sign-in failed. Check your email and password.";
-    throw new Error(message);
+    throw new Error(safeAuthError(data, "We couldn't sign you in. Check your email and password, then try again."));
   }
   return data;
 }
@@ -77,11 +88,11 @@ export async function setNewPassword(accessToken: string, password: string): Pro
       body: JSON.stringify({ password }),
     });
   } catch {
-    throw new Error("Could not connect to Supabase Auth. Check the project URL and internet connection.");
+    throw new Error("We couldn't connect to sign-in. Check your internet connection and try again.");
   }
   if (!response.ok) {
     const data = await response.json().catch(() => ({}));
-    throw new Error(typeof data.msg === "string" ? data.msg : typeof data.message === "string" ? data.message : "The recovery link is invalid or expired. Request a new one.");
+    throw new Error(safeAuthError(data, "This password reset link may have expired. Request a new link and try again."));
   }
 }
 
@@ -102,13 +113,12 @@ export async function requestEmailChange(email: string): Promise<void> {
       body: JSON.stringify({ email }),
     });
   } catch {
-    throw new Error("Could not connect to Supabase Auth. Check the project URL and internet connection.");
+    throw new Error("We couldn't connect to sign-in. Check your internet connection and try again.");
   }
 
   if (!response.ok) {
     const data = await response.json().catch(() => ({}));
-    const message = typeof data.msg === "string" ? data.msg : typeof data.message === "string" ? data.message : "Could not request this email change.";
-    throw new Error(message);
+    throw new Error(safeAuthError(data, "We couldn't request this email change. Check the address and try again."));
   }
 }
 
@@ -151,8 +161,8 @@ export async function apiFetch(input: RequestInfo | URL, init: RequestInit = {})
     new Headers(init.headers).forEach((value, key) => headers.set(key, value));
     if (accessToken) headers.set("Authorization", `Bearer ${accessToken}`);
     return fetch(input, { ...init, headers }).catch(() => {
-      throw new Error("Could not reach the PocketPerks backend. Check that it is running and NEXT_PUBLIC_API_URL is correct.");
-    });
+      throw new Error("We couldn't connect to your workspace. Check your connection and try again.");
+    }).then(hideTechnicalErrorDetails);
   };
   let response = await send(session?.access_token);
   if (response.status === 401 && session) {
