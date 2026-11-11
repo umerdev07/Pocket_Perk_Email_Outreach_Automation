@@ -1,6 +1,7 @@
 "use client";
 
 import { apiFetch } from "../../lib/auth";
+import { Area, CartesianGrid, Cell, ComposedChart, Line, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 
 import { useCallback, useEffect, useState } from "react";
 
@@ -42,7 +43,7 @@ type Summary = {
   recent_runs: { run_id: string; campaign_name: string; status: string; total_leads: number; created_at: string }[];
   activity: {
     available?: boolean;
-    days: { date: string; leads: number; replies: number }[];
+    days: { date: string; leads: number; replies: number; sent?: number; queued?: number; bounced?: number }[];
     campaign_status: { status: string; count: number }[];
     email_status: { status: string; count: number }[];
   };
@@ -78,6 +79,7 @@ export default function DashboardSummary({ apiBase, refreshKey, onNavigate }: Pr
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [activityDays, setActivityDays] = useState(14);
+  const [activeActivitySeries, setActiveActivitySeries] = useState<string[]>(["leads", "replies", "sent", "queued", "bounced"]);
   const [selectedEmailStatus, setSelectedEmailStatus] = useState("");
   const [selectedRunId, setSelectedRunId] = useState("");
   const [selectedRunDetail, setSelectedRunDetail] = useState<RunDetail | null>(null);
@@ -150,15 +152,14 @@ export default function DashboardSummary({ apiBase, refreshKey, onNavigate }: Pr
   ] : [];
   const activity = summary?.activity;
   const points = activity?.days || [];
-  const plot = { left: 42, top: 18, width: 650, height: 148 };
-  const peak = Math.max(1, ...points.map(point => Math.max(point.leads, point.replies)));
-  const seriesPoints = (field: "leads" | "replies") => points.map((point, index) => {
-    const x = plot.left + (points.length <= 1 ? plot.width / 2 : index * plot.width / (points.length - 1));
-    const y = plot.top + plot.height - (point[field] / peak) * plot.height;
-    return { x, y, value: point[field] };
-  });
-  const leadSeries = seriesPoints("leads");
-  const replySeries = seriesPoints("replies");
+  const chartPoints = points.map(point => ({ ...point, sent: point.sent || 0, queued: point.queued || 0, bounced: point.bounced || 0 }));
+  const activitySeries = [
+    { key: "leads", label: "Leads imported", color: "#16843c" },
+    { key: "replies", label: "Replies received", color: "#d92f3c" },
+    { key: "sent", label: "Emails sent", color: "#4f88dc" },
+    { key: "queued", label: "Waiting to send", color: "#d5a23d" },
+    { key: "bounced", label: "Bounced emails", color: "#9e3541" },
+  ] as const;
   const emailStatusColors: Record<string, string> = {
     generated: "#aab5ae", pending_review: "#d5a23d", approved: "#7390d4", queued: "#d5a23d",
     sent: "#16843c", sent_test: "#6eaecb", failed: "#cc5552", rejected: "#934c73",
@@ -166,14 +167,7 @@ export default function DashboardSummary({ apiBase, refreshKey, onNavigate }: Pr
   };
   const emailStatuses = activity?.email_status?.filter(item => item.count > 0) || [];
   const emailStatusTotal = emailStatuses.reduce((total, item) => total + item.count, 0);
-  const ringLength = 2 * Math.PI * 42;
-  let ringOffset = 0;
-  const ringSegments = emailStatuses.map(item => {
-    const length = emailStatusTotal ? (item.count / emailStatusTotal) * ringLength : 0;
-    const segment = { ...item, length, offset: ringOffset, color: emailStatusColors[item.status] || "#7b8c83" };
-    ringOffset += length;
-    return segment;
-  });
+  const ringSegments = emailStatuses.map(item => ({ ...item, color: emailStatusColors[item.status] || "#7b8c83" }));
   const formatStatus = (value: string) => ({
     queued: "Waiting to send",
     pending_review: "Needs review",
@@ -234,33 +228,46 @@ export default function DashboardSummary({ apiBase, refreshKey, onNavigate }: Pr
               <option value={7}>7 days</option><option value={14}>14 days</option><option value={30}>30 days</option><option value={90}>90 days</option>
             </select></label></div>
           {activity?.available === false ? <p className="chart-empty">Activity charts are temporarily unavailable.</p> : <>
-            <svg className="activity-chart" viewBox="0 0 720 210" role="img" aria-label="Daily imported leads and received replies over the last 14 days">
-              {[0, 0.5, 1].map(fraction => {
-                const y = plot.top + plot.height * fraction;
-                return <g key={fraction}><line className="chart-grid" x1={plot.left} x2={plot.left + plot.width} y1={y} y2={y}/><text x="4" y={y + 3}>{Math.round(peak * (1 - fraction))}</text></g>;
-              })}
-              {points.length > 0 && <>
-                <polyline className="chart-line-leads" points={leadSeries.map(point => `${point.x},${point.y}`).join(" ")}/>
-                <polyline className="chart-line-replies" points={replySeries.map(point => `${point.x},${point.y}`).join(" ")}/>
-                {leadSeries.map((point, index) => <circle className="chart-dot-leads" key={`lead-${index}`} cx={point.x} cy={point.y} r="3.5"><title>{points[index].date}: {point.value} leads</title></circle>)}
-                {replySeries.map((point, index) => <circle className="chart-dot-replies" key={`reply-${index}`} cx={point.x} cy={point.y} r="3"><title>{points[index].date}: {point.value} replies</title></circle>)}
-                {[0, Math.floor((points.length - 1) / 2), points.length - 1].filter((value, index, all) => all.indexOf(value) === index).map(index => <text key={index} x={leadSeries[index]?.x || plot.left} y="194" textAnchor={index === 0 ? "start" : index === points.length - 1 ? "end" : "middle"}>{new Date(`${points[index].date}T00:00:00Z`).toLocaleDateString(undefined, { month: "short", day: "numeric", timeZone: "UTC" })}</text>)}
-              </>}
-            </svg>
-            {points.every(point => point.leads === 0 && point.replies === 0) && <p className="chart-empty">No lead or reply activity in this period yet.</p>}
-            <div className="chart-legend"><span><i/>Leads imported</span><span><i className="reply-legend"/>Replies received</span></div>
+            <div className="activity-chart-filters" aria-label="Choose activity metrics">
+              {activitySeries.map(series => <button key={series.key} type="button"
+                className={activeActivitySeries.includes(series.key) ? "active" : ""}
+                aria-pressed={activeActivitySeries.includes(series.key)}
+                onClick={() => setActiveActivitySeries(current => current.includes(series.key)
+                  ? current.filter(key => key !== series.key) : [...current, series.key])}>
+                <i style={{ backgroundColor: series.color }}/>{series.label}
+              </button>)}
+            </div>
+            {!activeActivitySeries.length ? <p className="chart-empty">Select a metric above to show it on the chart.</p> : <div className="activity-plot">
+              <ResponsiveContainer width="100%" height={235}>
+                <ComposedChart data={chartPoints} margin={{ top: 8, right: 12, left: -18, bottom: 0 }}>
+                  <CartesianGrid stroke="#edf1ee" strokeDasharray="3 4" vertical={false}/>
+                  <XAxis dataKey="date" tickFormatter={value => new Date(`${value}T00:00:00Z`).toLocaleDateString(undefined, { month: "short", day: "numeric", timeZone: "UTC" })}
+                    tick={{ fill: "#87938b", fontSize: 10 }} tickLine={false} axisLine={false} minTickGap={22}/>
+                  <YAxis allowDecimals={false} width={34} tick={{ fill: "#87938b", fontSize: 10 }} tickLine={false} axisLine={false}/>
+                  <Tooltip labelFormatter={value => new Date(`${value}T00:00:00Z`).toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric", timeZone: "UTC" })}
+                    formatter={(value, name) => [Number(value).toLocaleString(), activitySeries.find(series => series.key === name)?.label || String(name)]}
+                    contentStyle={{ border: "1px solid #dfe8e1", borderRadius: 10, boxShadow: "0 8px 24px #173b2418", fontSize: 12 }}/>
+                  {activeActivitySeries.includes("leads") && <Area type="monotone" dataKey="leads" name="leads" stroke="#16843c" strokeWidth={2.5} fill="#16843c" fillOpacity={0.12} activeDot={{ r: 5 }} connectNulls/>}
+                  {activitySeries.filter(series => series.key !== "leads" && activeActivitySeries.includes(series.key)).map(series =>
+                    <Line key={series.key} type="monotone" dataKey={series.key} name={series.key} stroke={series.color} strokeWidth={2.2} dot={false} activeDot={{ r: 4 }} connectNulls/>
+                  )}
+                </ComposedChart>
+              </ResponsiveContainer>
+            </div>}
+            {chartPoints.length > 0 && chartPoints.every(point => !point.leads && !point.replies && !point.sent && !point.queued && !point.bounced) && <p className="chart-empty">No activity in this period yet.</p>}
           </>}
         </article>
         <article className="dashboard-chart-card status-chart-card">
           <div className="dashboard-chart-heading"><div><h3>Email delivery status</h3><p>Confirmed sends and remaining work</p></div></div>
           {activity?.available === false ? <p className="chart-empty">Email status details are temporarily unavailable.</p> : emailStatusTotal === 0 ? <p className="chart-empty">Personalized email activity will appear here.</p> : <div className="email-status-chart">
-            <div className="email-donut-wrap"><svg className="email-status-donut" viewBox="0 0 120 120" role="img" aria-label={`${emailStatusTotal} personalized emails by status`}>
-              <circle cx="60" cy="60" r="42" stroke="#edf1ee"/>
-              {ringSegments.map(item => <circle key={item.status} cx="60" cy="60" r="42" stroke={item.color}
-                opacity={!selectedEmailStatus || selectedEmailStatus === item.status ? 1 : .2}
-                strokeDasharray={`${item.length} ${ringLength - item.length}`} strokeDashoffset={-item.offset}>
-                <title>{formatStatus(item.status)}: {item.count}</title></circle>)}
-            </svg><div className="email-status-total"><b>{emailStatusTotal.toLocaleString()}</b><small>Email drafts</small></div></div>
+            <div className="email-donut-wrap"><ResponsiveContainer width="100%" height="100%">
+              <PieChart><Pie data={ringSegments} dataKey="count" nameKey="status" innerRadius={43} outerRadius={59} paddingAngle={2} stroke="none"
+                onClick={(_, index) => { const status = ringSegments[index]?.status; if (status) setSelectedEmailStatus(current => current === status ? "" : status); }}>
+                {ringSegments.map(item => <Cell key={item.status} fill={item.color} opacity={!selectedEmailStatus || selectedEmailStatus === item.status ? 1 : 0.24}/>)}</Pie>
+                <Tooltip formatter={(value, name) => [Number(value).toLocaleString(), formatStatus(String(name))]}
+                  contentStyle={{ border: "1px solid #dfe8e1", borderRadius: 10, boxShadow: "0 8px 24px #173b2418", fontSize: 12 }}/>
+              </PieChart>
+            </ResponsiveContainer><div className="email-status-total"><b>{emailStatusTotal.toLocaleString()}</b><small>Total emails</small></div></div>
             <div className="email-status-legend">{ringSegments.map(item => <button type="button" key={item.status}
               className={selectedEmailStatus && selectedEmailStatus !== item.status ? "muted" : ""}
               aria-pressed={selectedEmailStatus === item.status}

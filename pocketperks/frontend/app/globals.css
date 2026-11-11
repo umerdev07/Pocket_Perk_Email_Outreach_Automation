@@ -393,6 +393,15 @@ body { background: var(--paper); color: var(--ink); }
 .dashboard-chart-heading { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; margin-bottom: 12px; }
 .dashboard-chart-heading h3 { margin: 0; font-size: 14px; }
 .dashboard-chart-heading p { margin: 5px 0 0; color: var(--muted); font-size: 10px; }
+.activity-chart-filters { display: flex; flex-wrap: wrap; gap: 7px; margin: 2px 0 10px; }
+.activity-chart-filters button { display: inline-flex; align-items: center; gap: 7px; min-height: 31px; padding: 5px 9px; border: 1px solid var(--line); border-radius: 999px; background: #fff; color: var(--muted); font: inherit; font-size: 10px; cursor: pointer; transition: background .15s,border-color .15s,color .15s; }
+.activity-chart-filters button.active { border-color: #cfe2d2; background: #f4faf5; color: var(--ink); }
+.activity-chart-filters button i { width: 8px; height: 8px; border-radius: 50%; flex: 0 0 auto; }
+.activity-chart-filters button:focus-visible { outline: 2px solid var(--brand-green); outline-offset: 2px; }
+.activity-plot { width: 100%; min-width: 0; height: 235px; }
+.activity-chart-card .recharts-responsive-container { font-family: inherit; }
+.activity-chart-card .recharts-tooltip-cursor { fill: #f3f7f4; }
+.activity-chart-card .recharts-default-tooltip { border-radius: 10px; }
 .chart-period { border: 1px solid #e4ebe6; border-radius: 99px; padding: 6px 9px; color: var(--muted); font-size: 9px; white-space: nowrap; }
 .chart-period-select { display: inline-flex; align-items: center; gap: 7px; border: 1px solid #e4ebe6; border-radius: 99px; padding: 5px 9px; color: var(--muted); font-size: 9px; white-space: nowrap; }
 .chart-period-select select { border: 0; outline: 0; background: transparent; color: var(--ink); font: inherit; font-weight: 700; cursor: pointer; }
@@ -410,9 +419,9 @@ body { background: var(--paper); color: var(--ink); }
 .email-status-chart { display: grid; grid-template-columns: 130px minmax(0, 1fr); gap: 10px; align-items: center; min-height: 210px; }
 .email-status-donut { display: block; width: 126px; height: 126px; transform: rotate(-90deg); }
 .email-status-donut circle { fill: none; stroke-width: 14; }
-.email-status-total { position: absolute; display: grid; width: 126px; height: 126px; place-content: center; text-align: center; pointer-events: none; }
+.email-status-total { position: absolute; inset: 0; display: grid; align-content: center; justify-items: center; gap: 2px; margin: auto; width: 100%; height: 100%; text-align: center; pointer-events: none; }
 .email-status-total b { font-size: 24px; }
-.email-status-total small { color: var(--muted); font-size: 9px; }
+.email-status-total small { color: var(--muted); font-size: 10px; }
 .email-donut-wrap { position: relative; width: 126px; height: 126px; }
 .email-status-legend { display: grid; gap: 9px; max-height: 190px; overflow: auto; }
 .email-status-legend button { display: flex; align-items: center; justify-content: space-between; gap: 8px; border: 1px solid transparent; border-radius: 7px; padding: 4px 6px; background: transparent; color: var(--muted); font: inherit; font-size: 10px; text-align: left; cursor: pointer; }
@@ -423,6 +432,7 @@ body { background: var(--paper); color: var(--ink); }
 .email-status-legend b { color: var(--ink); font-variant-numeric: tabular-nums; }
 .chart-empty { color: var(--muted); font-size: 11px; text-align: center; }
 .chart-selection-note { margin: 8px 0 0; color: var(--muted); font-size: 9px; text-align: center; }
+.bounce-activity-card { margin-top: 22px; }
 
 @media(max-width:900px) {
   .dashboard-charts { grid-template-columns: 1fr; }
@@ -433,10 +443,11 @@ body { background: var(--paper); color: var(--ink); }
   .reply-results-count { padding: 0 15px 10px; }
   .reply-expanded { padding: 2px 14px 18px 32px; }
   .dashboard-chart-card { padding: 16px; }
-  .activity-chart { height: 190px; }
+  .activity-plot { height: 210px; }
   .email-status-chart { grid-template-columns: 1fr; justify-items: center; }
   .email-status-legend { width: 100%; }
 }
+@media(max-width:420px){.activity-chart-filters{gap:6px}.activity-chart-filters button{padding:5px 8px;font-size:9px}.bounce-activity-card{margin-top:18px}}
 
 .reply-actions { display: flex; justify-content: flex-end; margin-top: 12px; }
 .reply-opt-out-badge { width: fit-content; margin: 8px 0; padding: 6px 10px; border-radius: 999px; background: #fff4df; color: #855900; font-size: 12px; }
