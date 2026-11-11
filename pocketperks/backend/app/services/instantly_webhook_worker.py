@@ -3,6 +3,7 @@ import asyncio
 import logging
 
 from app.config import Settings
+from app.bounce_db import save_bounce_event
 from app.instantly_replies_service import sync_recent_replies
 from app.instantly_sent_sync_service import sync_sent_email_statuses
 from app.replies_db import save_received_replies
@@ -12,8 +13,9 @@ from app.webhook_db import claim_instantly_webhooks, finish_instantly_webhook
 logger = logging.getLogger(__name__)
 
 
-async def _process_event(settings: Settings, payload: dict) -> None:
-    event_type = str(payload.get("event_type") or payload.get("type") or "").casefold()
+async def _process_event(settings: Settings, payload: dict, event_key: str | None = None) -> None:
+    event_type = str(payload.get("event_type") or payload.get("type") or "").strip().casefold()
+    event_type = event_type.replace("-", "_").replace(" ", "_")
     if event_type in {"reply_received", "auto_reply_received", "email_reply_received"}:
         # The provider inbox read is authoritative; this also picks up full
         # message bodies and lets existing STOP detection run before cursor advance.
@@ -22,7 +24,12 @@ async def _process_event(settings: Settings, payload: dict) -> None:
     if event_type == "email_sent":
         await sync_sent_email_statuses(settings)
         return
-    if event_type in {"email_opened", "link_clicked", "email_bounced", "account_error",
+    if event_type == "email_bounced":
+        if not event_key:
+            raise ValueError("Bounce event is missing its deduplication key.")
+        await save_bounce_event(settings, event_key, payload)
+        return
+    if event_type in {"email_opened", "link_clicked", "account_error",
                       "campaign_completed", "lead_neutral", "lead_interested",
                       "lead_not_interested", "lead_meeting_booked", "lead_meeting_completed",
                       "lead_closed", "lead_out_of_office", "lead_wrong_person"}:
@@ -48,7 +55,8 @@ async def run_instantly_webhook_worker(settings: Settings) -> None:
                 if not isinstance(event_id, int) or not isinstance(payload, dict):
                     continue
                 try:
-                    await _process_event(settings, payload)
+                    event_key = event.get("event_key")
+                    await _process_event(settings, payload, event_key if isinstance(event_key, str) else None)
                 except asyncio.CancelledError:
                     raise
                 except Exception as exc:

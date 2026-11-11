@@ -17,6 +17,8 @@ type RunDetail = {
   sent_emails: number;
   failed_emails: number;
   pending_review_emails: number;
+  bounced_emails: number;
+  cancelled_after_bounce: number;
   created_at: string;
   finished_at?: string | null;
 };
@@ -41,6 +43,25 @@ type Summary = {
     days: { date: string; leads: number; replies: number }[];
     campaign_status: { status: string; count: number }[];
     email_status: { status: string; count: number }[];
+  };
+  bounce_activity: {
+    available: boolean;
+    total: number;
+    hard: number;
+    soft: number;
+    unknown: number;
+    recent: {
+      event_key: string;
+      email?: string | null;
+      bounce_type: "hard" | "soft" | "unknown";
+      reason?: string | null;
+      step_number?: number | null;
+      email_account?: string | null;
+      event_at: string;
+      match_status: "matched" | "unmatched";
+      business_name?: string | null;
+      campaign_name?: string | null;
+    }[];
   };
 };
 
@@ -119,6 +140,7 @@ export default function DashboardSummary({ apiBase, refreshKey, onNavigate }: Pr
     { label: "Campaigns", value: summary.total_campaigns, hint: `${summary.approved_campaigns} approved`, tone: "blue" },
     { label: "Needs approval", value: summary.pending_approvals, hint: "Human review required", tone: "amber" },
     { label: "Waiting to send", value: summary.queued_not_sent, hint: "No delivery confirmation yet", tone: "amber" },
+    { label: "Bounce events", value: summary.bounce_activity?.total || 0, hint: summary.bounce_activity?.available === false ? "Details unavailable" : `${summary.bounce_activity?.hard || 0} hard · ${summary.bounce_activity?.soft || 0} temporary · ${summary.bounce_activity?.unknown || 0} need review`, tone: "amber" },
     { label: "Emails being prepared", value: summary.active_runs, hint: "Currently processing", tone: "blue" },
     { label: "Sending campaigns", value: summary.instantly_campaigns, hint: summary.instantly_auto_launch_enabled ? `${summary.instantly_active_campaigns} active · automatic start on` : "Draft preparation only · automatic start is off", tone: "violet" },
     { label: "Leads added to campaigns", value: summary.instantly_leads_synced, hint: "Ready for scheduled sending", tone: "green" },
@@ -138,6 +160,7 @@ export default function DashboardSummary({ apiBase, refreshKey, onNavigate }: Pr
   const emailStatusColors: Record<string, string> = {
     generated: "#aab5ae", pending_review: "#d5a23d", approved: "#7390d4", queued: "#d5a23d",
     sent: "#16843c", sent_test: "#6eaecb", failed: "#cc5552", rejected: "#934c73",
+    bounced: "#bd3d3d", cancelled: "#87938c",
   };
   const emailStatuses = activity?.email_status?.filter(item => item.count > 0) || [];
   const emailStatusTotal = emailStatuses.reduce((total, item) => total + item.count, 0);
@@ -155,6 +178,8 @@ export default function DashboardSummary({ apiBase, refreshKey, onNavigate }: Pr
     generated: "Draft ready",
     sent_test: "Test sent",
     failed: "Could not send",
+    bounced: "Bounced",
+    cancelled: "Stopped after bounce",
   }[value] || value.replace(/_/g, " ").replace(/^./, letter => letter.toUpperCase()));
 
   return (
@@ -192,6 +217,8 @@ export default function DashboardSummary({ apiBase, refreshKey, onNavigate }: Pr
             <div><small>Waiting to send</small><b>{selectedRunDetail.queued_emails}</b></div>
             <div><small>Confirmed sent</small><b>{selectedRunDetail.sent_emails}</b></div>
             <div><small>Needs review</small><b>{selectedRunDetail.pending_review_emails}</b></div>
+            {selectedRunDetail.bounced_emails > 0 && <div className="latest-run-warning"><small>Bounced</small><b>{selectedRunDetail.bounced_emails}</b></div>}
+            {selectedRunDetail.cancelled_after_bounce > 0 && <div><small>Follow-ups stopped</small><b>{selectedRunDetail.cancelled_after_bounce}</b></div>}
             {selectedRunDetail.failed_emails + selectedRunDetail.failed_leads > 0 &&
               <div className="latest-run-warning"><small>Failed</small><b>{selectedRunDetail.failed_emails + selectedRunDetail.failed_leads}</b></div>}
           </div>
@@ -243,6 +270,21 @@ export default function DashboardSummary({ apiBase, refreshKey, onNavigate }: Pr
           </p>}
         </article>
       </div>}
+      {summary && <article className="dashboard-chart-card bounce-activity-card">
+        <div className="dashboard-chart-heading"><div><h3>Email bounce activity</h3>
+          <p>Undelivered emails and addresses blocked from future campaigns</p></div></div>
+        {summary.bounce_activity?.available === false ? <p className="chart-empty">Bounce details are temporarily unavailable. Refresh after the database update is applied.</p>
+          : !summary.bounce_activity?.recent?.length ? <p className="chart-empty">No bounced emails have been reported.</p>
+            : <div className="table"><table><thead><tr><th>Business / email</th><th>Campaign</th><th>Type</th><th>Reason</th><th>Received</th></tr></thead><tbody>
+              {summary.bounce_activity.recent.map(item => <tr key={item.event_key}>
+                <td>{item.business_name || "Unmatched lead"}<br/><small>{item.email || "Email not provided"}</small></td>
+                <td>{item.campaign_name || "Unmatched campaign"}</td>
+                <td>{item.bounce_type === "hard" ? "Hard · blocked" : item.bounce_type === "soft" ? "Temporary" : "Unknown · blocked for review"}</td>
+                <td title={item.reason || "No reason supplied"}>{item.reason || "No reason supplied"}</td>
+                <td>{new Date(item.event_at).toLocaleString()}</td>
+              </tr>)}
+            </tbody></table></div>}
+      </article>}
       <div className="dashboard-links">
         <button type="button" onClick={() => onNavigate("Campaigns")}>Campaigns →</button>
         <button type="button" onClick={() => onNavigate("Human Approval")}>Human Approval →</button>

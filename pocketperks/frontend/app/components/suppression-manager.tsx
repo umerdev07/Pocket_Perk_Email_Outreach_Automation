@@ -47,6 +47,8 @@ export default function SuppressionManager({ apiBase }: Props) {
   }
 
   async function release(email: string) {
+    const selected = items.find(item => item.email === email);
+    const isBounce = selected?.source === "bounce_auto";
     setBusy(true);
     setError("");
     setNotice("");
@@ -54,7 +56,8 @@ export default function SuppressionManager({ apiBase }: Props) {
       const response = await apiFetch(apiBase + "/api/suppressions/" + encodeURIComponent(email) + "/release", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ reason, recipient_confirmed: recipientConfirmed }),
+        body: JSON.stringify({ reason, recipient_confirmed: isBounce ? false : recipientConfirmed,
+          bounce_address_corrected: isBounce ? recipientConfirmed : false }),
       });
       const data = await response.json().catch(() => ({}));
       if (!response.ok) throw new Error(data.detail || "Could not allow future emails to this address.");
@@ -74,7 +77,7 @@ export default function SuppressionManager({ apiBase }: Props) {
   return <section className="card suppression-manager" aria-label="Do-not-email list management">
     <div className="suppression-manager-heading">
       <div><small className="eyebrow">ADMIN CONTROLS</small><h2>Do-not-email list</h2>
-        <p>Opted-out addresses are skipped in future imports and campaigns.</p></div>
+        <p>Opt-outs and unsafe bounced addresses are blocked from future campaigns.</p></div>
       <button type="button" className="secondary-button" onClick={() => void toggle()}>{open ? "Hide list" : "Manage list"}</button>
     </div>
     {open && <>
@@ -84,7 +87,7 @@ export default function SuppressionManager({ apiBase }: Props) {
       {notice && <p role="status" className="success">{notice}</p>}
       {loading ? <p>Loading do-not-email list…</p> : items.length === 0 ? <p>No blocked email addresses yet.</p> :
         <div className="table suppression-table"><table><thead><tr><th>Email</th><th>Status</th><th>Reason</th><th>Recorded</th><th>Action</th></tr></thead><tbody>
-          {items.map(item => <tr key={item.email}><td>{item.email}</td><td>{item.active ? "Opted out" : "Allowed"}</td>
+          {items.map(item => <tr key={item.email}><td>{item.email}</td><td>{item.active ? item.source === "bounce_auto" ? "Bounce block" : "Opted out" : "Allowed"}</td>
             <td>{item.active ? item.reason : item.release_reason || item.reason}</td>
             <td>{new Date(item.active ? item.created_at : item.released_at || item.created_at).toLocaleString()}</td>
             <td>{item.active ? <button type="button" className="secondary-button" onClick={() => {
@@ -93,10 +96,14 @@ export default function SuppressionManager({ apiBase }: Props) {
         </tbody></table></div>}
       {releaseEmail && <form className="suppression-release-form" onSubmit={event => { event.preventDefault(); void release(releaseEmail); }}>
         <h3>Release {releaseEmail}</h3>
-        <p>Only continue if the recipient explicitly asked to receive future emails again. This does not add them to a campaign that is already running.</p>
-        <label>Audit reason<textarea required minLength={10} maxLength={300} value={reason} onChange={event => setReason(event.target.value)} placeholder="How and when did the recipient confirm re-subscription?" rows={2}/></label>
+        <p>{items.find(item => item.email === releaseEmail)?.source === "bounce_auto"
+          ? "Only clear this bounce block after correcting the address and verifying it again. This does not add the lead to a campaign that is already running."
+          : "Only continue if the recipient explicitly asked to receive future emails again. This does not add them to a campaign that is already running."}</p>
+        <label>Audit reason<textarea required minLength={10} maxLength={300} value={reason} onChange={event => setReason(event.target.value)} placeholder={items.find(item => item.email === releaseEmail)?.source === "bounce_auto" ? "What was corrected and how was the address re-verified?" : "How and when did the recipient confirm re-subscription?"} rows={2}/></label>
         <label className="suppression-consent"><input type="checkbox" checked={recipientConfirmed} onChange={event => setRecipientConfirmed(event.target.checked)}/>
-          The recipient explicitly requested to receive PocketPerks emails again.</label>
+          {items.find(item => item.email === releaseEmail)?.source === "bounce_auto"
+            ? "I corrected this address and verified it is deliverable."
+            : "The recipient explicitly requested to receive PocketPerks emails again."}</label>
         <div><button type="button" className="secondary-button" onClick={() => setReleaseEmail("")}>Cancel</button>
           <button type="submit" className="action-button" disabled={busy || !recipientConfirmed || reason.trim().length < 10}>{busy ? "Saving…" : "Allow future emails"}</button></div>
       </form>}

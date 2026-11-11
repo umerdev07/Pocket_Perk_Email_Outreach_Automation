@@ -63,7 +63,7 @@ async def save_suppressions(settings: Settings, records: list[dict]) -> int:
     for record in records:
         email = normalize_email(record.get("email"))
         source = record.get("source")
-        if not email or source not in {"reply_auto", "reply_manual"}:
+        if not email or source not in {"reply_auto", "reply_manual", "bounce_auto"}:
             continue
         payload.append({
             "email": email,
@@ -117,14 +117,32 @@ async def list_suppression_management(settings: Settings, *, limit: int, offset:
     return {"items": suppressions, "events": events}
 
 
-async def release_suppression(settings: Settings, email: str, reason: str, actor_user_id: str) -> dict:
+async def release_suppression(settings: Settings, email: str, reason: str, actor_user_id: str,
+                              *, recipient_confirmed: bool = False,
+                              bounce_address_corrected: bool = False) -> dict:
     normalized = normalize_email(email)
     if not normalized:
         raise HTTPException(status_code=422, detail="Enter a valid email address.")
     reason = reason.strip()
     if len(reason) < 10:
-        raise HTTPException(status_code=422, detail="Record why the recipient explicitly asked to resume emails.")
+        raise HTTPException(status_code=422, detail="Add a clear audit reason before clearing this block.")
     async with httpx.AsyncClient(timeout=20) as client:
+        current_response = await client.get(f"{_base(settings)}/email_suppressions", params={
+            "select": "source,active", "email": f"eq.{normalized}", "limit": "1",
+        }, headers=_headers(settings))
+        if not current_response.is_success:
+            raise HTTPException(status_code=503, detail="Could not verify why this address is blocked.")
+        try:
+            current_rows = current_response.json()
+        except (ValueError, TypeError) as exc:
+            raise HTTPException(status_code=503, detail="Could not verify why this address is blocked.") from exc
+        if not isinstance(current_rows, list) or not current_rows:
+            raise HTTPException(status_code=404, detail="Suppression record not found.")
+        is_bounce = current_rows[0].get("source") == "bounce_auto"
+        if is_bounce and not bounce_address_corrected:
+            raise HTTPException(status_code=422, detail="Confirm that the address was corrected and re-verified before clearing a bounce block.")
+        if not is_bounce and not recipient_confirmed:
+            raise HTTPException(status_code=422, detail="Confirm that the recipient explicitly asked to receive emails again.")
         response = await client.post(f"{_base(settings)}/rpc/release_email_suppression", headers=_headers(settings),
                                      json={"target_email": normalized, "release_reason": reason[:300],
                                            "actor_id": actor_user_id})

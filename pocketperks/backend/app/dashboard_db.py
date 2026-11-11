@@ -5,6 +5,7 @@ import httpx
 from fastapi import HTTPException
 
 from app.config import Settings
+from app.bounce_db import get_bounce_summary
 
 
 def _base(settings: Settings) -> str:
@@ -40,6 +41,15 @@ async def _activity(client, base: str, headers: dict[str, str], days: int) -> di
     if not isinstance(value, dict):
         return {"days": [], "campaign_status": [], "email_status": [], "available": False}
     return value
+
+
+async def _bounce_activity(settings: Settings) -> dict:
+    try:
+        return await get_bounce_summary(settings)
+    except HTTPException:
+        # A dashboard refresh remains usable during rollout before migration 034
+        # is applied; the bounce panel then reports that details are unavailable.
+        return {"available": False, "total": 0, "hard": 0, "soft": 0, "unknown": 0, "recent": []}
 
 
 async def _recent_campaign_runs(client, base: str, headers: dict[str, str], limit: int = 12) -> tuple[list[dict], list[dict]]:
@@ -82,12 +92,14 @@ async def _campaign_run_detail(client, base: str, headers: dict[str, str], run: 
             raise HTTPException(status_code=503, detail="Could not load the campaign name.")
         campaign_rows = campaign_response.json()
         campaign_name = campaign_rows[0].get("name") if campaign_rows else "Campaign"
-    queued, sent, sent_test, failed, pending_review = await asyncio.gather(
+    queued, sent, sent_test, failed, pending_review, bounced, cancelled = await asyncio.gather(
         _count(client, base, headers, "personalized_emails", {"run_id": f"eq.{run_id}", "status": "eq.queued"}),
         _count(client, base, headers, "personalized_emails", {"run_id": f"eq.{run_id}", "status": "eq.sent"}),
         _count(client, base, headers, "personalized_emails", {"run_id": f"eq.{run_id}", "status": "eq.sent_test"}),
         _count(client, base, headers, "personalized_emails", {"run_id": f"eq.{run_id}", "status": "eq.failed"}),
         _count(client, base, headers, "personalized_emails", {"run_id": f"eq.{run_id}", "status": "eq.pending_review"}),
+        _count(client, base, headers, "personalized_emails", {"run_id": f"eq.{run_id}", "status": "eq.bounced"}),
+        _count(client, base, headers, "personalized_emails", {"run_id": f"eq.{run_id}", "status": "eq.cancelled"}),
     )
     return {
         "run_id": run_id, "campaign_id": run["campaign_id"], "batch_id": run["batch_id"],
@@ -97,6 +109,7 @@ async def _campaign_run_detail(client, base: str, headers: dict[str, str], run: 
         "created_at": run["created_at"], "finished_at": run.get("finished_at"),
         "queued_emails": queued, "sent_emails": sent + sent_test,
         "failed_emails": failed, "pending_review_emails": pending_review,
+        "bounced_emails": bounced, "cancelled_after_bounce": cancelled,
     }
 
 
@@ -141,6 +154,7 @@ async def get_dashboard_summary(settings: Settings, *, activity_days: int = 14) 
             _count(client, base, headers, "instantly_campaign_mappings", {"status": "eq.active"}),
             _activity(client, base, headers, activity_days),
             _latest_campaign_run(client, base, headers),
+            _bounce_activity(settings),
         )
     latest_run, recent_runs = totals[12]
     return {"total_leads": totals[0], "total_campaigns": totals[1], "approved_campaigns": totals[2],
@@ -149,4 +163,5 @@ async def get_dashboard_summary(settings: Settings, *, activity_days: int = 14) 
             "instantly_campaigns": totals[8], "instantly_leads_synced": totals[9],
             "instantly_active_campaigns": totals[10],
             "instantly_auto_launch_enabled": settings.instantly_auto_launch and settings.send_mode == "live",
-            "activity": totals[11], "latest_run": latest_run, "recent_runs": recent_runs}
+            "activity": totals[11], "latest_run": latest_run, "recent_runs": recent_runs,
+            "bounce_activity": totals[13]}

@@ -215,7 +215,7 @@ export default function RunEmailsPanel({ apiBase, runId, processed, status, onGe
             {detailError && <p role="alert" className="error">{detailError}</p>}
             {toast && <p role="status" className="personalized-saved">✓ {toast}</p>}
             {selectedLead.items.map(email => <article className="card personalized-email-card" key={email.id}>
-              <div className="personalized-email-card-head"><div><small className="eyebrow">EMAIL {email.step?.step_number ?? "—"}</small><h2>Email {email.step?.step_number ?? ""}</h2></div><span className={`badge ${email.status}`}>{{ queued: "Waiting to send", pending_review: "Needs review", generated: "Draft ready", sent_test: "Test sent", failed: "Could not send" }[email.status] || email.status.replaceAll("_", " ")}</span></div>
+              <div className="personalized-email-card-head"><div><small className="eyebrow">EMAIL {email.step?.step_number ?? "—"}</small><h2>Email {email.step?.step_number ?? ""}</h2></div><span className={`badge ${email.status}`}>{{ queued: "Waiting to send", pending_review: "Needs review", generated: "Draft ready", sent_test: "Test sent", failed: "Could not send", bounced: "Bounced", cancelled: "Stopped after bounce" }[email.status] || email.status.replaceAll("_", " ")}</span></div>
               {email.step?.context && <p className="personalized-email-context">{email.step.context}</p>}
               <label className="personalized-field">To<input type="email" value={selectedLead.lead.email || "Recipient email unavailable"} readOnly /></label>
               <label className="personalized-field">Subject<input value={email.subject} onChange={event => changeEmail(email.id, "subject", event.target.value)} maxLength={500} /></label>

@@ -11,7 +11,8 @@ router = APIRouter(prefix="/api/suppressions", tags=["email suppression"])
 
 class ReleaseRequest(BaseModel):
     reason: str = Field(min_length=10, max_length=300)
-    recipient_confirmed: bool
+    recipient_confirmed: bool = False
+    bounce_address_corrected: bool = False
 
 
 @router.get("")
@@ -24,8 +25,7 @@ async def get_suppression_management(limit: int = Query(default=100, ge=1, le=10
 @router.post("/{email}/release")
 async def release_email_address(email: str, body: ReleaseRequest, request: Request,
                                 settings: Settings = Depends(get_settings)):
-    if body.recipient_confirmed is not True:
-        from fastapi import HTTPException
-        raise HTTPException(status_code=422, detail="Confirm that the recipient explicitly asked to receive emails again.")
     return await release_suppression(settings, email, body.reason,
-                                     request.state.workspace_user["id"])
+                                     request.state.workspace_user["id"],
+                                     recipient_confirmed=body.recipient_confirmed,
+                                     bounce_address_corrected=body.bounce_address_corrected)
