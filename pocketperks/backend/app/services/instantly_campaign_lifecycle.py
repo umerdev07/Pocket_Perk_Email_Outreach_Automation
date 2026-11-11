@@ -1,13 +1,46 @@
 """Enforce exact campaign end timestamps for auto-launched Instantly campaigns."""
+import asyncio
 import logging
 from datetime import UTC, datetime
 
 from app.config import Settings
 from app.instantly_sync_db import (load_active_campaign_windows, load_scheduled_campaign_windows,
                                    update_campaign_mapping)
-from app.integrations.instantly_client import activate_campaign, pause_campaign
+from app.integrations.instantly_client import activate_campaign, get_campaign, pause_campaign
 
 logger = logging.getLogger(__name__)
+
+
+async def reconcile_completed_campaigns(settings: Settings) -> int:
+    """Mirror provider-confirmed completed status for active local mappings."""
+    mappings = await load_active_campaign_windows(settings)
+    reconciled = 0
+    semaphore = asyncio.Semaphore(5)
+
+    async def reconcile(mapping: dict) -> int:
+        campaign_id = mapping.get("instantly_campaign_id")
+        if not campaign_id:
+            return 0
+        async with semaphore:
+            try:
+                provider_campaign = await get_campaign(str(campaign_id), settings)
+                # Instantly API v2 campaign status 3 means Completed. Do not infer
+                # completion from sends/replies locally; only persist provider truth.
+                if provider_campaign and provider_campaign.get("status") in (3, "3"):
+                    await update_campaign_mapping(settings, str(mapping["id"]), {
+                        "status": "completed", "error_detail": None,
+                    })
+                    logger.info("Reconciled completed Instantly campaign (mapping_id=%s).", mapping["id"])
+                    return 1
+            except Exception as exc:
+                # A transient provider failure must not hide an active campaign or
+                # block scheduled activation/end-time enforcement.
+                logger.warning("Could not reconcile Instantly campaign status (mapping_id=%s, error=%s).",
+                               mapping.get("id"), type(exc).__name__)
+        return 0
+
+    reconciled = sum(await asyncio.gather(*(reconcile(mapping) for mapping in mappings)))
+    return reconciled
 
 
 async def pause_campaigns_past_end_time(settings: Settings) -> int:

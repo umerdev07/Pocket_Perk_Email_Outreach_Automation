@@ -35,7 +35,9 @@ type Summary = {
   instantly_campaigns: number;
   instantly_leads_synced: number;
   instantly_active_campaigns: number;
+  instantly_completed_campaigns: number;
   instantly_auto_launch_enabled: boolean;
+  recent_completed_campaigns: { campaign_name: string; completed_at: string }[];
   latest_run: RunDetail | null;
   recent_runs: { run_id: string; campaign_name: string; status: string; total_leads: number; created_at: string }[];
   activity: {
@@ -142,7 +144,7 @@ export default function DashboardSummary({ apiBase, refreshKey, onNavigate }: Pr
     { label: "Waiting to send", value: summary.queued_not_sent, hint: "No delivery confirmation yet", tone: "amber" },
     { label: "Bounce events", value: summary.bounce_activity?.total || 0, hint: summary.bounce_activity?.available === false ? "Details unavailable" : `${summary.bounce_activity?.hard || 0} hard · ${summary.bounce_activity?.soft || 0} temporary · ${summary.bounce_activity?.unknown || 0} need review`, tone: "amber" },
     { label: "Emails being prepared", value: summary.active_runs, hint: "Currently processing", tone: "blue" },
-    { label: "Sending campaigns", value: summary.instantly_campaigns, hint: summary.instantly_auto_launch_enabled ? `${summary.instantly_active_campaigns} active · automatic start on` : "Draft preparation only · automatic start is off", tone: "violet" },
+    { label: "Sending campaigns", value: summary.instantly_active_campaigns, hint: `${summary.instantly_completed_campaigns} completed${summary.recent_completed_campaigns?.length ? ` · latest: ${summary.recent_completed_campaigns[0].campaign_name}` : ""}${summary.instantly_auto_launch_enabled ? " · automatic start on" : " · automatic start is off"}`, tone: "violet" },
     { label: "Leads added to campaigns", value: summary.instantly_leads_synced, hint: "Ready for scheduled sending", tone: "green" },
     { label: "Lead replies", value: summary.total_replies, hint: `${summary.unread_replies} unread in PocketPerks`, tone: "amber" },
   ] : [];
