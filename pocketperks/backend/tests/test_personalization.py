@@ -130,6 +130,8 @@ def test_large_run_loads_leads_as_database_pages():
                       personalization_concurrency=2, personalization_batch_size=2)
     with patch("app.services.personalization_service.load_run_context", new=AsyncMock(return_value=data)), \
          patch("app.services.personalization_service.load_lead_page", new=AsyncMock(return_value=page)) as load_page, \
+         patch("app.services.personalization_service.get_existing_personalization_keys", new=AsyncMock(return_value=set())), \
+         patch("app.services.personalization_service.get_suppressed_emails", new=AsyncMock(return_value=set())), \
          patch("app.services.personalization_service.chat_completion_json", new=AsyncMock(return_value={
              "subject": "Subject", "body": "Body"})), \
          patch("app.services.personalization_service.assess_personalized_email", new=AsyncMock(return_value={
