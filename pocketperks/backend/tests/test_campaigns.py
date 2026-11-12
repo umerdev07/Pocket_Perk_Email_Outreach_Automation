@@ -45,6 +45,18 @@ def test_valid_campaign_and_steps_are_saved_through_database_module():
     assert save.await_args.args[1]["end_date"] == "2026-11-30"
 
 
+def test_campaign_rejects_non_three_day_automatic_followup():
+    with patch("app.routers.campaigns.create_campaign", new=AsyncMock()) as save:
+        response = TestClient(create_app(auth_enabled=False)).post("/api/campaigns", json={
+            "name": "Cafe outreach", "total_emails": 2,
+            "instructions": "Introduce loyalty stamps", "start_date": "2026-11-01",
+            "end_date": "2026-11-30", "contexts": ["Introduction", "Follow-up"],
+            "step_delays_minutes": [0, 240],
+        })
+    assert response.status_code == 422
+    save.assert_not_awaited()
+
+
 def test_campaign_end_date_before_start_date_is_rejected():
     with patch("app.routers.campaigns.create_campaign", new=AsyncMock()) as save:
         response = TestClient(create_app(auth_enabled=False)).post("/api/campaigns", json={

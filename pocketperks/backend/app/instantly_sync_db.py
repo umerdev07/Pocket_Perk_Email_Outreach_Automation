@@ -88,6 +88,33 @@ async def get_campaign_mapping_for_run(settings: Settings, run_id: str) -> dict 
     return rows[0] if rows else None
 
 
+async def load_active_sender_usage(settings: Settings) -> dict:
+    """Return configured sender overlap from campaigns that can currently send.
+
+    Instantly owns the live queue and daily sent counters. This deliberately
+    reports assignments, not a false estimate of remaining capacity.
+    """
+    active_statuses = "active,scheduled,launching"
+    async with httpx.AsyncClient(timeout=20) as client:
+        rows = await _checked(await client.get(f"{_base(settings)}/instantly_campaign_mappings", params={
+            "select": "run_id,status,sender_account_emails",
+            "status": f"in.({active_statuses})",
+            "instantly_campaign_id": "not.is.null",
+            "limit": "5000",
+        }, headers=_headers(settings)), "Could not check campaigns already using these inboxes.")
+
+    by_sender: dict[str, list[dict]] = {}
+    for row in rows:
+        senders = row.get("sender_account_emails")
+        if not isinstance(senders, list):
+            continue
+        campaign = {"run_id": str(row.get("run_id") or ""), "status": row.get("status")}
+        for sender in senders:
+            if isinstance(sender, str) and sender.strip():
+                by_sender.setdefault(sender.strip().lower(), []).append(campaign)
+    return {"active_campaign_count": len(rows), "by_sender": by_sender}
+
+
 async def load_scheduled_campaign_windows(settings: Settings) -> list[dict]:
     """Load scheduled mappings with their app-owned start/end timestamps."""
     base = _base(settings)

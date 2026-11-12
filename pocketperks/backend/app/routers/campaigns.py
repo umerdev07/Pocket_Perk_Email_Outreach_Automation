@@ -34,19 +34,22 @@ class CampaignCreate(BaseModel):
             raise ValueError("contexts must contain one item per email step")
         if any(not context.strip() for context in self.contexts):
             raise ValueError("each context must contain non-empty text")
+        if self.step_triggers is None:
+            self.step_triggers = ["scheduled"] * self.total_emails
         if self.step_delays_minutes is None:
             self.step_delays_minutes = [0, *([4320] * (self.total_emails - 1))]
         if len(self.step_delays_minutes) != self.total_emails:
             raise ValueError("step_delays_minutes must contain one delay per email step")
         if self.step_delays_minutes[0] != 0 or any(type(delay) is not int or delay < (0 if i == 0 else 15) or delay > 43200
                                                    for i, delay in enumerate(self.step_delays_minutes)):
-            raise ValueError("Email 1 must have no delay; follow-up delays must be 15 minutes to 30 days")
-        if self.step_triggers is None:
-            self.step_triggers = ["scheduled"] * self.total_emails
+            raise ValueError("Email 1 must have no delay; follow-up delays must be valid")
         if (len(self.step_triggers) != self.total_emails or self.step_triggers[0] != "scheduled"
                 or (len(self.step_triggers) > 1 and self.step_triggers[1] != "scheduled")
                 or any(trigger not in {"scheduled", "after_conversation", "close_loop"} for trigger in self.step_triggers)):
             raise ValueError("Emails 1 and 2 must be scheduled; later steps can be timed, close-loop, or after_conversation.")
+        if any(trigger == "scheduled" and index > 0 and self.step_delays_minutes[index] != 4320
+               for index, trigger in enumerate(self.step_triggers)):
+            raise ValueError("Automatic follow-ups must be scheduled exactly 3 days after the previous email.")
         if not self.sending_days or len(set(self.sending_days)) != len(self.sending_days) or any(day < 0 or day > 6 for day in self.sending_days):
             raise ValueError("Select at least one unique sending day (0 Sunday through 6 Saturday)")
         try:

@@ -26,6 +26,8 @@ class Settings(BaseSettings):
     # Keep provider load bounded; tune this to the configured Claude model's limits.
     personalization_concurrency: int = Field(default=1, ge=1, le=10)
     personalization_batch_size: int = Field(default=25, ge=1, le=250)
+    # Operational target for new first-touch leads; follow-up sends are additional.
+    outreach_new_leads_per_day: int = Field(default=100, ge=1, le=100000)
 
 
 @lru_cache

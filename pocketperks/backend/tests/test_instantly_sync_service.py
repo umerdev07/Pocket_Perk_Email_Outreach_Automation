@@ -55,6 +55,29 @@ def test_campaign_payload_refuses_any_unapproved_step():
         )
 
 
+def test_sync_recovery_preserves_legacy_campaign_followup_delay():
+    payload = build_campaign_payload(
+        {"name": "Legacy campaign", "start_date": "2026-11-05", "end_date": "2026-11-10"},
+        [approved_step(1), {**approved_step(2), "delay_minutes": 240}],
+    )
+    assert payload["sequences"][0]["steps"][0]["delay"] == 4
+    assert payload["sequences"][0]["steps"][0]["delay_unit"] == "hours"
+
+
+def test_close_loop_keeps_its_day_fifteen_timing():
+    payload = build_campaign_payload(
+        {"name": "Test", "start_date": "2026-11-05", "end_date": "2026-11-30"},
+        [
+            approved_step(1),
+            {**approved_step(2), "delay_minutes": 4320},
+            {**approved_step(3), "delay_minutes": 12 * 1440, "trigger_type": "close_loop"},
+        ],
+    )
+    assert payload["sequences"][0]["steps"][0]["delay"] == 3
+    assert payload["sequences"][0]["steps"][1]["delay"] == 12
+    assert payload["sequences"][0]["steps"][2]["delay"] == 0
+
+
 def test_lead_payload_maps_reviewed_personalized_email_variables():
     result = build_lead_payload(
         {"email": "owner@example.co.uk", "business_name": "Example Cafe", "website": "https://example.co.uk"},

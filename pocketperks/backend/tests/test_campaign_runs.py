@@ -53,6 +53,22 @@ def test_start_rejects_unapproved_campaign():
     assert len(FakeSupabase.calls) == 1
 
 
+def test_start_rejects_legacy_scheduled_followup_before_creating_run():
+    campaign_id, batch_id = uuid4(), uuid4()
+    fake([FakeResponse([{"id": str(campaign_id), "status": "approved", "campaign_steps": [
+        {"step_number": 1, "delay_minutes": 0, "trigger_type": "scheduled"},
+        {"step_number": 2, "delay_minutes": 240, "trigger_type": "scheduled"},
+    ]}])])
+    with patch("app.campaign_runs_db.httpx.AsyncClient", FakeSupabase):
+        try:
+            asyncio.run(start_campaign_run(db_settings(), str(campaign_id), str(batch_id)))
+            assert False, "Expected a legacy follow-up delay to be rejected"
+        except HTTPException as exc:
+            assert exc.status_code == 422
+            assert "fixed 3-day wait" in exc.detail
+    assert len(FakeSupabase.calls) == 1
+
+
 def test_start_rejects_missing_batch():
     campaign_id, batch_id = uuid4(), uuid4()
     fake([FakeResponse([{"id": str(campaign_id), "status": "approved"}]), FakeResponse([])])

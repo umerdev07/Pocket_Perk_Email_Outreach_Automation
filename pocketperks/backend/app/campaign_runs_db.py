@@ -42,6 +42,19 @@ async def start_campaign_run(settings: Settings, campaign_id: str, batch_id: str
             raise HTTPException(status_code=404, detail="Campaign not found.")
         if campaigns[0].get("status") != "approved":
             raise HTTPException(status_code=409, detail="Campaign must be approved before it can be started.")
+        campaign_steps = sorted(campaigns[0].get("campaign_steps") or [],
+                                key=lambda step: step.get("step_number", 0))
+        for index, step in enumerate(campaign_steps):
+            if index == 0 or step.get("trigger_type", "scheduled") != "scheduled":
+                continue
+            delay_minutes = step.get("delay_minutes")
+            if delay_minutes is None:
+                delay_minutes = int(step.get("delay_days") or 0) * 1440
+            if delay_minutes != 4320:
+                raise HTTPException(
+                    status_code=422,
+                    detail="This campaign uses an older follow-up interval. Update and approve it again; automatic follow-ups now use a fixed 3-day wait.",
+                )
 
         batch_response = await client.get(f"{base}/lead_batches", params={
             "select": "id,imported_count", "id": f"eq.{batch_id}", "limit": "1",
