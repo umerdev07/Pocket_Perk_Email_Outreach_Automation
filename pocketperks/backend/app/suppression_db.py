@@ -57,6 +57,35 @@ async def get_suppressed_emails(settings: Settings, emails: set[str] | list[str]
     return found
 
 
+async def get_recorded_suppression_emails(settings: Settings, emails: set[str] | list[str]) -> set[str]:
+    """Return addresses with any suppression record, including released ones.
+
+    Historical reply reconciliation must not reactivate a deliberately released
+    address just because its old opt-out reply is still stored.
+    """
+    normalized = sorted({email for value in emails if (email := normalize_email(value))})
+    if not normalized:
+        return set()
+    found: set[str] = set()
+    async with httpx.AsyncClient(timeout=20) as client:
+        for offset in range(0, len(normalized), _CHUNK_SIZE):
+            chunk = normalized[offset:offset + _CHUNK_SIZE]
+            response = await client.get(f"{_base(settings)}/email_suppressions", params={
+                "select": "email", "email": f"in.({','.join(chunk)})",
+                "limit": str(len(chunk)),
+            }, headers=_headers(settings))
+            if not response.is_success:
+                raise HTTPException(status_code=503, detail="Could not check recorded email suppression history.")
+            try:
+                rows = response.json()
+            except (ValueError, TypeError) as exc:
+                raise HTTPException(status_code=503, detail="Could not check recorded email suppression history.") from exc
+            if not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows):
+                raise HTTPException(status_code=503, detail="Could not check recorded email suppression history.")
+            found.update(str(row["email"]).lower() for row in rows if row.get("email"))
+    return found
+
+
 async def save_suppressions(settings: Settings, records: list[dict]) -> int:
     """Record new opt-outs and reactivations atomically with audit events."""
     payload = []

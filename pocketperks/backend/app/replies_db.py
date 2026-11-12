@@ -14,7 +14,8 @@ from app.integrations.instantly_client import (
     get_email as get_instantly_email,
     reply_to_email as reply_to_instantly_email,
 )
-from app.suppression_db import get_suppressed_emails, normalize_email, save_suppressions
+from app.suppression_db import (get_recorded_suppression_emails, get_suppressed_emails,
+                                normalize_email, save_suppressions)
 
 _OPT_OUT_RE = re.compile(
     r"\b(?:no\s+thanks|unsubscribe(?:\s+me)?|opt\s+me\s+out|remove\s+me\s+from\s+(?:your\s+)?(?:list|mailing\s+list)|"
@@ -94,8 +95,8 @@ async def list_replies(settings: Settings, *, limit: int = 100, offset: int = 0)
             "order": "received_at.desc", "limit": limit, "offset": offset,
         }, headers=_headers(settings))
     rows = _rows(response, "Could not load lead replies.")
-    # Reconcile clear opt-outs in already-saved replies too. The reply sync
-    # cursor may have advanced before opt-out detection was deployed.
+    # Backfill clear opt-outs from historical replies if no suppression record
+    # exists. Do not replay an old opt-out after an admin explicitly released it.
     existing_opt_outs = []
     for row in rows:
         lead = row.get("leads") if isinstance(row.get("leads"), dict) else {}
@@ -107,7 +108,10 @@ async def list_replies(settings: Settings, *, limit: int = 100, offset: int = 0)
                 "reason": "Recipient explicitly requested no further email.",
                 "lead_id": row.get("lead_id"), "campaign_id": row.get("campaign_id"),
             })
-    await save_suppressions(settings, existing_opt_outs)
+    recorded_opt_outs = await get_recorded_suppression_emails(
+        settings, {record["email"] for record in existing_opt_outs})
+    missing_opt_outs = [record for record in existing_opt_outs if record["email"] not in recorded_opt_outs]
+    await save_suppressions(settings, missing_opt_outs)
     addresses = {str((row.get("leads") or {}).get("email") or row.get("from_email") or "") for row in rows}
     suppressed = await get_suppressed_emails(settings, addresses)
     for row in rows:
