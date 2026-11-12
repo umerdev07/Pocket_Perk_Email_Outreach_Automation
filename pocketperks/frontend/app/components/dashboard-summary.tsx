@@ -20,6 +20,9 @@ type RunDetail = {
   pending_review_emails: number;
   bounced_emails: number;
   cancelled_after_bounce: number;
+  not_added_emails: number;
+  sync_status: string;
+  sync_error?: string | null;
   created_at: string;
   finished_at?: string | null;
 };
@@ -30,6 +33,7 @@ type Summary = {
   approved_campaigns: number;
   pending_approvals: number;
   queued_not_sent: number;
+  not_added_emails: number;
   active_runs: number;
   total_replies: number;
   unread_replies: number;
@@ -40,10 +44,11 @@ type Summary = {
   instantly_auto_launch_enabled: boolean;
   recent_completed_campaigns: { campaign_name: string; completed_at: string }[];
   latest_run: RunDetail | null;
-  recent_runs: { run_id: string; campaign_name: string; status: string; total_leads: number; created_at: string }[];
+  recent_runs: { run_id: string; campaign_name: string; status: string; sync_status: string;
+    sync_error?: string | null; total_leads: number; created_at: string }[];
   activity: {
     available?: boolean;
-    days: { date: string; leads: number; replies: number; sent?: number; queued?: number; bounced?: number }[];
+    days: { date: string; leads: number; replies: number; sent?: number; queued?: number; not_added?: number; bounced?: number }[];
     campaign_status: { status: string; count: number }[];
     email_status: { status: string; count: number }[];
   };
@@ -79,7 +84,7 @@ export default function DashboardSummary({ apiBase, refreshKey, onNavigate }: Pr
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [activityDays, setActivityDays] = useState(14);
-  const [activeActivitySeries, setActiveActivitySeries] = useState<string[]>(["leads", "replies", "sent", "queued", "bounced"]);
+  const [activeActivitySeries, setActiveActivitySeries] = useState<string[]>(["leads", "replies", "sent", "queued", "not_added", "bounced"]);
   const [selectedEmailStatus, setSelectedEmailStatus] = useState("");
   const [selectedRunId, setSelectedRunId] = useState("");
   const [selectedRunDetail, setSelectedRunDetail] = useState<RunDetail | null>(null);
@@ -144,24 +149,26 @@ export default function DashboardSummary({ apiBase, refreshKey, onNavigate }: Pr
     { label: "Campaigns", value: summary.total_campaigns, hint: `${summary.approved_campaigns} approved`, tone: "blue" },
     { label: "Needs approval", value: summary.pending_approvals, hint: "Human review required", tone: "amber" },
     { label: "Waiting to send", value: summary.queued_not_sent, hint: "No delivery confirmation yet", tone: "amber" },
+    { label: "Not added to campaigns", value: summary.not_added_emails, hint: "Prepared but not accepted into a sending campaign", tone: "amber" },
     { label: "Bounce events", value: summary.bounce_activity?.total || 0, hint: summary.bounce_activity?.available === false ? "Details unavailable" : `${summary.bounce_activity?.hard || 0} hard · ${summary.bounce_activity?.soft || 0} temporary · ${summary.bounce_activity?.unknown || 0} need review`, tone: "amber" },
     { label: "Emails being prepared", value: summary.active_runs, hint: "Currently processing", tone: "blue" },
-    { label: "Campaigns in Instantly", value: summary.instantly_campaigns, hint: `${summary.instantly_active_campaigns} active · ${summary.instantly_completed_campaigns} completed${summary.recent_completed_campaigns?.length ? ` · latest completed: ${summary.recent_completed_campaigns[0].campaign_name}` : ""}${summary.instantly_auto_launch_enabled ? " · automatic start on" : " · automatic start is off"}`, tone: "violet" },
+    { label: "Active sending campaigns", value: summary.instantly_active_campaigns, hint: `${summary.instantly_completed_campaigns} completed · ${Math.max(0, summary.instantly_campaigns - summary.instantly_active_campaigns - summary.instantly_completed_campaigns)} other provider records may be drafts, scheduled, paused or need attention${summary.instantly_auto_launch_enabled ? " · automatic start on" : " · automatic start is off"}`, tone: "violet" },
     { label: "Leads added to campaigns", value: summary.instantly_leads_synced, hint: "Ready for scheduled sending", tone: "green" },
     { label: "Lead replies", value: summary.total_replies, hint: `${summary.unread_replies} unread in PocketPerks`, tone: "amber" },
   ] : [];
   const activity = summary?.activity;
   const points = activity?.days || [];
-  const chartPoints = points.map(point => ({ ...point, sent: point.sent || 0, queued: point.queued || 0, bounced: point.bounced || 0 }));
+  const chartPoints = points.map(point => ({ ...point, sent: point.sent || 0, queued: point.queued || 0, not_added: point.not_added || 0, bounced: point.bounced || 0 }));
   const activitySeries = [
     { key: "leads", label: "Leads imported", color: "#16843c" },
     { key: "replies", label: "Replies received", color: "#d92f3c" },
     { key: "sent", label: "Emails sent", color: "#4f88dc" },
     { key: "queued", label: "Waiting to send", color: "#d5a23d" },
+    { key: "not_added", label: "Not added to campaign", color: "#8d6db5" },
     { key: "bounced", label: "Bounced emails", color: "#9e3541" },
   ] as const;
   const emailStatusColors: Record<string, string> = {
-    generated: "#aab5ae", pending_review: "#d5a23d", approved: "#7390d4", queued: "#d5a23d",
+    generated: "#aab5ae", pending_review: "#d5a23d", approved: "#7390d4", queued: "#d5a23d", not_added: "#8d6db5",
     sent: "#16843c", sent_test: "#6eaecb", failed: "#cc5552", rejected: "#934c73",
     bounced: "#bd3d3d", cancelled: "#87938c",
   };
@@ -176,7 +183,20 @@ export default function DashboardSummary({ apiBase, refreshKey, onNavigate }: Pr
     failed: "Could not send",
     bounced: "Bounced",
     cancelled: "Stopped after bounce",
+    not_added: "Not added to campaign",
   }[value] || value.replace(/_/g, " ").replace(/^./, letter => letter.toUpperCase()));
+  const runStatusLabel = (run: { status: string; sync_status: string }) => {
+    if (run.sync_status === "failed") return "Sync needs attention";
+    if (run.sync_status === "active") return "Sending";
+    if (run.sync_status === "completed") return "Sequence complete";
+    if (run.sync_status === "leads_synced" || run.sync_status === "scheduled") return "Leads added · scheduled";
+    if (run.sync_status === "awaiting_review") return "Waiting for review";
+    if (run.sync_status === "syncing_leads" || run.sync_status === "launching") return "Adding leads";
+    if (run.sync_status === "paused") return "Paused";
+    if (run.sync_status === "draft_created" || run.sync_status === "pending") return "Draft · leads not added";
+    if (run.status === "completed" && run.sync_status === "not_started") return "Prepared · not added";
+    return formatStatus(run.status);
+  };
 
   return (
     <section className="dashboard-summary" aria-labelledby="dashboard-heading">
@@ -203,14 +223,16 @@ export default function DashboardSummary({ apiBase, refreshKey, onNavigate }: Pr
         </div><label className="run-history-select"><span>Recent campaigns</span><select aria-label="Select recent campaign activity" value={selectedRunId}
           onChange={event => setSelectedRunId(event.target.value)}>
           {summary.recent_runs.map(run => <option key={run.run_id} value={run.run_id}>
-            {run.campaign_name} · {new Date(run.created_at).toLocaleString()} · {formatStatus(run.status)}
+            {run.campaign_name} · {new Date(run.created_at).toLocaleString()} · {runStatusLabel(run)}
           </option>)}
         </select></label></div>
         {runDetailLoading ? <p className="chart-empty">Loading selected campaign activity…</p> : runDetailError ? <p role="alert" className="chart-empty">{runDetailError}</p> : selectedRunDetail && <>
-          <div className="run-history-status"><span className={`badge ${selectedRunDetail.status}`}>{formatStatus(selectedRunDetail.status)}</span><small>Run started {new Date(selectedRunDetail.created_at).toLocaleString()}</small></div>
+          <div className="run-history-status"><span className={`badge ${selectedRunDetail.status}`}>{selectedRunDetail.status === "completed" ? "Emails prepared" : formatStatus(selectedRunDetail.status)}</span><span className={`badge ${selectedRunDetail.sync_status === "failed" ? "failed" : selectedRunDetail.sync_status}`}>{runStatusLabel(selectedRunDetail)}</span><small>Run started {new Date(selectedRunDetail.created_at).toLocaleString()}</small></div>
+          {selectedRunDetail.sync_status === "failed" && selectedRunDetail.sync_error && <p className="latest-run-warning" role="status">{selectedRunDetail.sync_error}</p>}
           <div className="latest-run-metrics">
             <div><small>Leads processed</small><b>{selectedRunDetail.processed} / {selectedRunDetail.total_leads}</b></div>
             <div><small>Waiting to send</small><b>{selectedRunDetail.queued_emails}</b></div>
+            {selectedRunDetail.not_added_emails > 0 && <div className="latest-run-warning"><small>Not added to campaign</small><b>{selectedRunDetail.not_added_emails}</b></div>}
             <div><small>Confirmed sent</small><b>{selectedRunDetail.sent_emails}</b></div>
             <div><small>Needs review</small><b>{selectedRunDetail.pending_review_emails}</b></div>
             {selectedRunDetail.bounced_emails > 0 && <div className="latest-run-warning"><small>Bounced</small><b>{selectedRunDetail.bounced_emails}</b></div>}
@@ -258,7 +280,7 @@ export default function DashboardSummary({ apiBase, refreshKey, onNavigate }: Pr
           </>}
         </article>
         <article className="dashboard-chart-card status-chart-card">
-          <div className="dashboard-chart-heading"><div><h3>Email delivery status</h3><p>Confirmed sends and remaining work</p></div></div>
+          <div className="dashboard-chart-heading"><div><h3>Email task status</h3><p>Prepared messages, campaign queue and confirmed delivery</p></div></div>
           {activity?.available === false ? <p className="chart-empty">Email status details are temporarily unavailable.</p> : emailStatusTotal === 0 ? <p className="chart-empty">Personalized email activity will appear here.</p> : <div className="email-status-chart">
             <div className="email-donut-wrap"><ResponsiveContainer width="100%" height="100%">
               <PieChart><Pie data={ringSegments} dataKey="count" nameKey="status" innerRadius={43} outerRadius={59} paddingAngle={2} stroke="none"
@@ -267,7 +289,7 @@ export default function DashboardSummary({ apiBase, refreshKey, onNavigate }: Pr
                 <Tooltip formatter={(value, name) => [Number(value).toLocaleString(), formatStatus(String(name))]}
                   contentStyle={{ border: "1px solid #dfe8e1", borderRadius: 10, boxShadow: "0 8px 24px #173b2418", fontSize: 12 }}/>
               </PieChart>
-            </ResponsiveContainer><div className="email-status-total"><b>{emailStatusTotal.toLocaleString()}</b><small>Total emails</small></div></div>
+            </ResponsiveContainer><div className="email-status-total"><b>{emailStatusTotal.toLocaleString()}</b><small>Email tasks</small></div></div>
             <div className="email-status-legend">{ringSegments.map(item => <button type="button" key={item.status}
               className={selectedEmailStatus && selectedEmailStatus !== item.status ? "muted" : ""}
               aria-pressed={selectedEmailStatus === item.status}

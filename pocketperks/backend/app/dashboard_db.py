@@ -72,11 +72,23 @@ async def _recent_campaign_runs(client, base: str, headers: dict[str, str], limi
             raise HTTPException(status_code=503, detail="Could not load campaign names.")
         campaign_rows = campaign_response.json()
     names = {str(row["id"]): row.get("name") or "Campaign" for row in campaign_rows}
+    run_ids = [str(row["id"]) for row in rows if row.get("id")]
+    sync_response = await client.get(f"{base}/instantly_campaign_mappings", params={
+        "select": "run_id,status,error_detail", "run_id": f"in.({','.join(run_ids)})",
+        "limit": str(len(run_ids)),
+    }, headers=headers)
+    if not sync_response.is_success:
+        raise HTTPException(status_code=503, detail="Could not load recent campaign sync states.")
+    sync_rows = sync_response.json()
+    sync_by_run = {str(row["run_id"]): row for row in sync_rows
+                   if isinstance(row, dict) and row.get("run_id")}
     options = [{
         "run_id": str(row["id"]), "campaign_id": row["campaign_id"],
         "campaign_name": names.get(str(row.get("campaign_id")), "Campaign"),
         "status": row["status"], "total_leads": row["total_leads"],
         "created_at": row["created_at"],
+        "sync_status": sync_by_run.get(str(row["id"]), {}).get("status", "not_started"),
+        "sync_error": sync_by_run.get(str(row["id"]), {}).get("error_detail"),
     } for row in rows]
     return rows, options
 
@@ -92,24 +104,38 @@ async def _campaign_run_detail(client, base: str, headers: dict[str, str], run: 
             raise HTTPException(status_code=503, detail="Could not load the campaign name.")
         campaign_rows = campaign_response.json()
         campaign_name = campaign_rows[0].get("name") if campaign_rows else "Campaign"
-    queued, sent, sent_test, failed, pending_review, bounced, cancelled = await asyncio.gather(
-        _count(client, base, headers, "personalized_emails", {"run_id": f"eq.{run_id}", "status": "eq.queued"}),
-        _count(client, base, headers, "personalized_emails", {"run_id": f"eq.{run_id}", "status": "eq.sent"}),
-        _count(client, base, headers, "personalized_emails", {"run_id": f"eq.{run_id}", "status": "eq.sent_test"}),
-        _count(client, base, headers, "personalized_emails", {"run_id": f"eq.{run_id}", "status": "eq.failed"}),
-        _count(client, base, headers, "personalized_emails", {"run_id": f"eq.{run_id}", "status": "eq.pending_review"}),
-        _count(client, base, headers, "personalized_emails", {"run_id": f"eq.{run_id}", "status": "eq.bounced"}),
-        _count(client, base, headers, "personalized_emails", {"run_id": f"eq.{run_id}", "status": "eq.cancelled"}),
+    email_totals_response, sync_response = await asyncio.gather(
+        client.post(f"{base}/rpc/dashboard_run_email_totals", json={"p_run_id": run_id}, headers=headers),
+        client.get(f"{base}/instantly_campaign_mappings", params={
+            "select": "status,error_detail", "run_id": f"eq.{run_id}", "limit": "1",
+        }, headers=headers),
     )
+    if not email_totals_response.is_success:
+        raise HTTPException(status_code=503, detail="Could not load campaign delivery totals.")
+    if not sync_response.is_success:
+        raise HTTPException(status_code=503, detail="Could not load campaign sync state.")
+    try:
+        email_totals = email_totals_response.json()
+        sync_rows = sync_response.json()
+    except (ValueError, TypeError) as exc:
+        raise HTTPException(status_code=503, detail="Campaign delivery details were invalid.") from exc
+    if not isinstance(email_totals, dict) or not isinstance(sync_rows, list):
+        raise HTTPException(status_code=503, detail="Campaign delivery details were invalid.")
+    sync = sync_rows[0] if sync_rows else {}
     return {
         "run_id": run_id, "campaign_id": run["campaign_id"], "batch_id": run["batch_id"],
         "campaign_name": campaign_name or "Campaign",
         "status": run["status"], "total_leads": run["total_leads"],
         "processed": run["processed"], "skipped": run["skipped"], "failed_leads": run["failed"],
         "created_at": run["created_at"], "finished_at": run.get("finished_at"),
-        "queued_emails": queued, "sent_emails": sent + sent_test,
-        "failed_emails": failed, "pending_review_emails": pending_review,
-        "bounced_emails": bounced, "cancelled_after_bounce": cancelled,
+        "sync_status": sync.get("status", "not_started"), "sync_error": sync.get("error_detail"),
+        "queued_emails": int(email_totals.get("queued", 0)),
+        "not_added_emails": int(email_totals.get("not_added", 0)),
+        "sent_emails": int(email_totals.get("sent", 0)),
+        "failed_emails": int(email_totals.get("failed", 0)),
+        "pending_review_emails": int(email_totals.get("pending_review", 0)),
+        "bounced_emails": int(email_totals.get("bounced", 0)),
+        "cancelled_after_bounce": int(email_totals.get("cancelled", 0)),
     }
 
 
@@ -198,11 +224,16 @@ async def get_dashboard_summary(settings: Settings, *, activity_days: int = 14) 
             _bounce_activity(settings),
         )
     latest_run, recent_runs = totals[13]
+    activity = totals[12]
+    delivery_totals = activity.get("delivery_totals", {}) if isinstance(activity, dict) else {}
+    queued_not_sent = int(delivery_totals.get("queued", 0))
+    not_added_emails = int(delivery_totals.get("not_added", 0))
     return {"total_leads": totals[0], "total_campaigns": totals[1], "approved_campaigns": totals[2],
-            "pending_approvals": totals[3], "queued_not_sent": totals[4], "active_runs": totals[5],
+            "pending_approvals": totals[3], "queued_not_sent": queued_not_sent,
+            "not_added_emails": not_added_emails, "active_runs": totals[5],
             "total_replies": totals[6], "unread_replies": totals[7],
             "instantly_campaigns": totals[8], "instantly_leads_synced": totals[9],
             "instantly_active_campaigns": totals[10], "instantly_completed_campaigns": totals[11],
             "instantly_auto_launch_enabled": settings.instantly_auto_launch and settings.send_mode == "live",
-            "activity": totals[12], "latest_run": latest_run, "recent_runs": recent_runs,
+            "activity": activity, "latest_run": latest_run, "recent_runs": recent_runs,
             "recent_completed_campaigns": totals[14], "bounce_activity": totals[15]}
