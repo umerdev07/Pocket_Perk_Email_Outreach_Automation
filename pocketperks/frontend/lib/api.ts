@@ -34,8 +34,7 @@ export async function hideTechnicalErrorDetails(response: Response): Promise<Res
 }
 
 export async function getHealth(): Promise<Health> {
-  const base = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
-  const response = await fetch(`${base.replace(/\/$/, "")}/api/health`, {
+  const response = await fetch("/api/health", {
     cache: "no-store", signal: AbortSignal.timeout(15000),
   });
   if (!response.ok && response.status !== 503) throw new Error("Backend health check failed.");

@@ -13,16 +13,16 @@ POLL_SECONDS = 30
 STATUS_RECONCILE_SECONDS = 300
 
 
-async def run_instantly_lifecycle_worker(settings: Settings) -> None:
+async def run_instantly_lifecycle_worker(settings: Settings, pool=None) -> None:
     last_status_reconcile = 0.0
     while True:
         try:
             if settings.instantly_api_key:
-                await activate_scheduled_campaigns(settings)
-                await pause_campaigns_past_end_time(settings)
+                await activate_scheduled_campaigns(settings,pool=pool)
+                await pause_campaigns_past_end_time(settings,pool=pool)
                 now = time.monotonic()
                 if now - last_status_reconcile >= STATUS_RECONCILE_SECONDS:
-                    await reconcile_completed_campaigns(settings)
+                    await reconcile_completed_campaigns(settings,pool=pool)
                     last_status_reconcile = now
             await asyncio.sleep(POLL_SECONDS)
         except asyncio.CancelledError:

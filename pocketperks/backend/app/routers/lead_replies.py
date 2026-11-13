@@ -16,35 +16,36 @@ class ReplyBody(BaseModel):
 
 
 @router.get("")
-async def get_lead_replies(limit: int = Query(default=100, ge=1, le=100),
+async def get_lead_replies(request: Request, limit: int = Query(default=100, ge=1, le=100),
                            offset: int = Query(default=0, ge=0),
                            settings: Settings = Depends(get_settings)):
-    return await list_replies(settings, limit=limit, offset=offset)
+    return await list_replies(settings, limit=limit, offset=offset,
+                              pool=getattr(request.app.state,"postgres_pool",None))
 
 
 @router.post("/sync")
-async def refresh_lead_replies(pages: int = Query(default=1, ge=1, le=5),
+async def refresh_lead_replies(request: Request, pages: int = Query(default=1, ge=1, le=5),
                                settings: Settings = Depends(get_settings)):
-    return await sync_recent_replies(settings, max_pages=pages)
+    return await sync_recent_replies(settings, max_pages=pages,pool=getattr(request.app.state,"postgres_pool",None))
 
 
 @router.patch("/{reply_id}/read")
-async def read_lead_reply(reply_id: UUID, settings: Settings = Depends(get_settings)):
+async def read_lead_reply(reply_id: UUID, request: Request, settings: Settings = Depends(get_settings)):
     # This updates PocketPerks' local review state only; Instantly's Unibox state is untouched.
-    return await mark_reply_read(settings, str(reply_id))
+    return await mark_reply_read(settings, str(reply_id),pool=getattr(request.app.state,"postgres_pool",None))
 
 
 @router.post("/{reply_id}/reply")
-async def reply_to_lead_email(reply_id: UUID, payload: ReplyBody,
+async def reply_to_lead_email(reply_id: UUID, payload: ReplyBody, request: Request,
                               settings: Settings = Depends(get_settings)):
-    return await send_reply(settings, str(reply_id), payload.body)
+    return await send_reply(settings, str(reply_id), payload.body,pool=getattr(request.app.state,"postgres_pool",None))
 
 
 @router.delete("/{reply_id}")
-async def delete_lead_reply(reply_id: UUID, settings: Settings = Depends(get_settings)):
-    return await delete_reply(settings, str(reply_id))
+async def delete_lead_reply(reply_id: UUID, request: Request, settings: Settings = Depends(get_settings)):
+    return await delete_reply(settings, str(reply_id),pool=getattr(request.app.state,"postgres_pool",None))
 
 
 @router.post("/{reply_id}/opt-out")
 async def opt_out_lead_reply(reply_id: UUID, request: Request, settings: Settings = Depends(get_settings)):
-    return await mark_reply_opt_out(settings, str(reply_id), request.state.workspace_user["id"])
+    return await mark_reply_opt_out(settings, str(reply_id), request.state.workspace_user["id"],pool=getattr(request.app.state,"postgres_pool",None))

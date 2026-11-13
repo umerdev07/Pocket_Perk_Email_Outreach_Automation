@@ -97,7 +97,7 @@ def _safe_step_error(exc: Exception) -> str:
 
 async def _process_lead(settings: Settings, run_id: str, campaign: dict, steps: list[dict],
                         lead: dict, semaphore: asyncio.Semaphore,
-                        existing_keys: set[tuple[str, str]]) -> tuple[str, dict | None]:
+                        existing_keys: set[tuple[str, str]], pool=None) -> tuple[str, dict | None]:
     if not (lead.get("business_name") or "").strip():
         return "skipped", {"lead_id": lead["id"], "reason": "missing_business_name"}
 
@@ -118,13 +118,18 @@ async def _process_lead(settings: Settings, run_id: str, campaign: dict, steps: 
                 draft = {"subject": step["draft"]["subject"], "body": step["draft"]["body"]}
                 risk = await assess_personalized_email(subject, body_text, draft=draft, lead=lead,
                                                        settings=settings, campaign=campaign, step=step)
-                await save_personalized_email(settings, {
+                save_payload = {
                     "run_id": run_id, "lead_id": lead["id"], "campaign_id": campaign["id"],
                     "step_id": step["id"], "subject": subject, "body": body_text,
                     "risk_level": risk["risk_level"], "risk_reason": risk["risk_reason"],
+                    "send_mode": getattr(settings, "send_mode", "test"),
                     "status": ("approved" if step.get("trigger_type") == "after_conversation" else "queued")
                     if risk["risk_level"] == "LOW" else "pending_review",
-                })
+                }
+                if pool is None:
+                    await save_personalized_email(settings, save_payload)
+                else:
+                    await save_personalized_email(settings, save_payload, pool=pool)
             except Exception as exc:
                 # A failed step marks this lead failed, but doesn't block its other
                 # steps or any other lead in this chunk.
@@ -135,21 +140,22 @@ async def _process_lead(settings: Settings, run_id: str, campaign: dict, steps: 
     return status, failed_steps or None
 
 
-async def process_campaign_run(settings: Settings, run_id: str) -> None:
+async def process_campaign_run(settings: Settings, run_id: str, pool=None) -> None:
     processed = skipped = failed = 0
     rate_limit_seen = False
     skip_log: list[dict] = []
     failure_log: list[dict] = []
     try:
-        data = await load_run_context(settings, run_id)
+        data = (await load_run_context(settings, run_id) if pool is None
+                else await load_run_context(settings, run_id, pool=pool))
         campaign, steps = data["campaign"], data["campaign"]["steps"]
         semaphore = _shared_semaphore(settings.personalization_concurrency)
 
         async def process_chunk(lead_chunk: list[dict]) -> None:
             nonlocal processed, skipped, failed, rate_limit_seen
-            suppressed = await get_suppressed_emails(settings, {
-                str(lead.get("email") or "") for lead in lead_chunk
-            })
+            suppressed_emails = {str(lead.get("email") or "") for lead in lead_chunk}
+            suppressed = (await get_suppressed_emails(settings, suppressed_emails) if pool is None
+                          else await get_suppressed_emails(settings, suppressed_emails, pool=pool))
             eligible_chunk = []
             for lead in lead_chunk:
                 eligibility_reason = lead_eligibility_reason(lead, getattr(settings, "lead_eligibility_mode", "advisory"))
@@ -164,10 +170,12 @@ async def process_campaign_run(settings: Settings, run_id: str) -> None:
                     eligible_chunk.append(lead)
             existing_keys = set()
             if "leads" not in data and eligible_chunk:
-                existing_keys = await get_existing_personalization_keys(
-                    settings, run_id, [str(lead["id"]) for lead in eligible_chunk])
+                existing_keys = (await get_existing_personalization_keys(
+                    settings, run_id, [str(lead["id"]) for lead in eligible_chunk]) if pool is None else
+                    await get_existing_personalization_keys(
+                    settings, run_id, [str(lead["id"]) for lead in eligible_chunk], pool=pool))
             results = await asyncio.gather(*(
-                _process_lead(settings, run_id, campaign, steps, lead, semaphore, existing_keys)
+                _process_lead(settings, run_id, campaign, steps, lead, semaphore, existing_keys, pool=pool)
                 for lead in eligible_chunk
             ), return_exceptions=True)
 
@@ -193,8 +201,11 @@ async def process_campaign_run(settings: Settings, run_id: str) -> None:
                     processed += 1
 
             # One progress write per completed chunk instead of one per lead.
-            await update_run_progress(settings, run_id, processed=processed, skipped=skipped, failed=failed,
-                                      skip_log=None, status="running")
+            progress_args = dict(processed=processed, skipped=skipped, failed=failed, skip_log=None, status="running")
+            if pool is None:
+                await update_run_progress(settings, run_id, **progress_args)
+            else:
+                await update_run_progress(settings, run_id, **progress_args, pool=pool)
 
         # Existing fixtures may supply a lead list. Production reads bounded
         # database pages and then schedules only a small chunk at a time.
@@ -208,7 +219,8 @@ async def process_campaign_run(settings: Settings, run_id: str) -> None:
             db_page_size = 500
             offset = 0
             while True:
-                page = await load_lead_page(settings, batch_id, offset=offset, limit=db_page_size)
+                page = (await load_lead_page(settings, batch_id, offset=offset, limit=db_page_size) if pool is None
+                        else await load_lead_page(settings, batch_id, offset=offset, limit=db_page_size, pool=pool))
                 for lead_chunk in _chunks(page, settings.personalization_batch_size):
                     await process_chunk(lead_chunk)
                     if rate_limit_seen:
@@ -221,20 +233,26 @@ async def process_campaign_run(settings: Settings, run_id: str) -> None:
 
         try:
             if rate_limit_seen:
-                await update_run_progress(settings, run_id, processed=processed, skipped=skipped, failed=failed,
+                progress_args = dict(processed=processed, skipped=skipped, failed=failed,
                     skip_log=skip_log, status="failed", finished=True,
                     error_detail="Claude API rate limit persisted after retries. Incomplete email steps will be retried.",
                     failure_log=failure_log)
+                if pool is None: await update_run_progress(settings, run_id, **progress_args)
+                else: await update_run_progress(settings, run_id, **progress_args, pool=pool)
             else:
-                await update_run_progress(settings, run_id, processed=processed, skipped=skipped, failed=failed,
-                                          skip_log=skip_log, status="completed", finished=True, failure_log=failure_log)
+                progress_args = dict(processed=processed, skipped=skipped, failed=failed,
+                                     skip_log=skip_log, status="completed", finished=True, failure_log=failure_log)
+                if pool is None: await update_run_progress(settings, run_id, **progress_args)
+                else: await update_run_progress(settings, run_id, **progress_args, pool=pool)
         except HTTPException:
             # A not-yet-applied optional failure-log migration must not turn a
             # successfully processed run into a failed run.
-            await update_run_progress(settings, run_id, processed=processed, skipped=skipped, failed=failed,
+            progress_args = dict(processed=processed, skipped=skipped, failed=failed,
                 skip_log=skip_log, status="failed" if rate_limit_seen else "completed", finished=True,
                 error_detail="Claude API rate limit persisted after retries. Incomplete email steps will be retried."
                 if rate_limit_seen else None)
+            if pool is None: await update_run_progress(settings, run_id, **progress_args)
+            else: await update_run_progress(settings, run_id, **progress_args, pool=pool)
     except Exception as exc:
         # The request has already returned. Record fatal setup/database errors on the run.
         # Only expose known application messages or the exception type; provider/HTTP
@@ -243,14 +261,20 @@ async def process_campaign_run(settings: Settings, run_id: str) -> None:
             f"Background processing stopped ({type(exc).__name__}). Check database schema, access, and backend logs."
         )
         try:
-            await update_run_progress(settings, run_id, processed=processed, skipped=skipped, failed=failed + 1,
+            progress_args = dict(processed=processed, skipped=skipped, failed=failed + 1,
                                       skip_log=None, status="failed", finished=True, error_detail=detail,
                                       failure_log=failure_log)
+            if pool is None: await update_run_progress(settings, run_id, **progress_args)
+            else: await update_run_progress(settings, run_id, **progress_args, pool=pool)
         except Exception:
-            # Keep the failure status useful even if optional diagnostic columns or
-            # skip-log migrations have not yet been applied in Supabase.
+            # Keep the failure status useful if optional diagnostic columns or
+            # skip-log migrations are missing from PostgreSQL.
             try:
-                await update_run_progress(settings, run_id, processed=processed, skipped=skipped, failed=failed + 1,
-                                          skip_log=None, status="failed", finished=True)
+                if pool is None:
+                    await update_run_progress(settings, run_id, processed=processed, skipped=skipped, failed=failed + 1,
+                                              skip_log=None, status="failed", finished=True)
+                else:
+                    await update_run_progress(settings, run_id, processed=processed, skipped=skipped, failed=failed + 1,
+                                              skip_log=None, status="failed", finished=True, pool=pool)
             except Exception:
                 pass

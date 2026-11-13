@@ -18,11 +18,11 @@ def is_sending_account_ready(account: dict) -> bool:
     return status in {"1", "active", "connected"} and not account.get("setup_pending")
 
 
-async def assign_senders_and_continue(settings: Settings, run_id: str, emails: list[str]) -> dict:
+async def assign_senders_and_continue(settings: Settings, run_id: str, emails: list[str], pool=None) -> dict:
     selected = list(dict.fromkeys(email.strip().lower() for email in emails if isinstance(email, str)))
     if not selected:
         raise HTTPException(status_code=422, detail="Select at least one sending inbox.")
-    mapping = await get_campaign_mapping_for_run(settings, run_id)
+    mapping = await get_campaign_mapping_for_run(settings, run_id,pool=pool)
     if not mapping or not mapping.get("instantly_campaign_id"):
         raise HTTPException(status_code=409, detail="The Instantly campaign is not ready for sender selection yet.")
     if mapping.get("status") not in {"leads_synced", "scheduled", "active"}:
@@ -38,7 +38,7 @@ async def assign_senders_and_continue(settings: Settings, run_id: str, emails: l
     if invalid:
         raise HTTPException(status_code=422, detail="Choose only active, connected Instantly inboxes.")
 
-    sync_status = await get_campaign_run_instantly_status(settings, run_id)
+    sync_status = await get_campaign_run_instantly_status(settings, run_id,pool=pool)
     if sync_status["synced_leads"] < 1:
         raise HTTPException(status_code=409, detail="At least one lead must sync successfully before sending can continue.")
     if sync_status["pending_leads"] or sync_status["failed_leads"] or sync_status.get("unknown_leads", 0):
@@ -53,16 +53,16 @@ async def assign_senders_and_continue(settings: Settings, run_id: str, emails: l
     if mapping.get("status") == "active":
         await update_campaign_mapping(settings, str(mapping["id"]), {
             "sender_account_emails": selected, "error_detail": None,
-        })
+        },pool=pool)
         return {"run_id": run_id, "status": "active", "sender_account_emails": selected,
                 "message": "Sending inboxes updated on the active Instantly campaign."}
 
-    context = await load_sync_run_context(settings, run_id)
+    context = await load_sync_run_context(settings, run_id,pool=pool)
     campaign = context["campaign"]
     if not settings.instantly_auto_launch or settings.send_mode != "live":
         await update_campaign_mapping(settings, str(mapping["id"]), {
             "sender_account_emails": selected, "status": "leads_synced", "error_detail": None,
-        })
+        },pool=pool)
         return {"run_id": run_id, "status": "leads_synced", "sender_account_emails": selected,
                 "message": "Sending inboxes assigned. Automatic launch is disabled by configuration."}
 
@@ -76,14 +76,14 @@ async def assign_senders_and_continue(settings: Settings, run_id: str, emails: l
     if start_at > datetime.now(UTC):
         await update_campaign_mapping(settings, str(mapping["id"]), {
             "sender_account_emails": selected, "status": "scheduled", "error_detail": None,
-        })
+        },pool=pool)
         return {"run_id": run_id, "status": "scheduled", "sender_account_emails": selected,
                 "message": "Sending inboxes assigned. Instantly will activate the campaign at its start time."}
 
     await update_campaign_mapping(settings, str(mapping["id"]), {
         "sender_account_emails": selected, "status": "launching",
         "error_detail": "Sender selection saved; activation is being confirmed.",
-    })
+    },pool=pool)
     try:
         await activate_campaign(provider_id, settings)
     except InstantlyError as exc:
@@ -92,10 +92,10 @@ async def assign_senders_and_continue(settings: Settings, run_id: str, emails: l
             "status": "launching" if outcome_unknown else "leads_synced",
             "error_detail": "Instantly activation outcome is unknown; check campaign status before retrying."
             if outcome_unknown else f"Instantly campaign activation failed: {str(exc)}"[:240],
-        })
+        },pool=pool)
         raise HTTPException(status_code=502, detail=str(exc)) from exc
     await update_campaign_mapping(settings, str(mapping["id"]), {
         "sender_account_emails": selected, "status": "active", "error_detail": None,
-    })
+    },pool=pool)
     return {"run_id": run_id, "status": "active", "sender_account_emails": selected,
             "message": "Sending inboxes assigned and Instantly confirmed campaign activation."}

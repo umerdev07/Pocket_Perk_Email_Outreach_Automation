@@ -11,9 +11,9 @@ from app.integrations.instantly_client import activate_campaign, get_campaign, p
 logger = logging.getLogger(__name__)
 
 
-async def reconcile_completed_campaigns(settings: Settings) -> int:
+async def reconcile_completed_campaigns(settings: Settings, pool=None) -> int:
     """Mirror provider-confirmed completed status for active local mappings."""
-    mappings = await load_active_campaign_windows(settings)
+    mappings = await load_active_campaign_windows(settings,pool=pool)
     reconciled = 0
     semaphore = asyncio.Semaphore(5)
 
@@ -29,7 +29,7 @@ async def reconcile_completed_campaigns(settings: Settings) -> int:
                 if provider_campaign and provider_campaign.get("status") in (3, "3"):
                     await update_campaign_mapping(settings, str(mapping["id"]), {
                         "status": "completed", "error_detail": None,
-                    })
+                    },pool=pool)
                     logger.info("Reconciled completed Instantly campaign (mapping_id=%s).", mapping["id"])
                     return 1
             except Exception as exc:
@@ -43,10 +43,10 @@ async def reconcile_completed_campaigns(settings: Settings) -> int:
     return reconciled
 
 
-async def pause_campaigns_past_end_time(settings: Settings) -> int:
+async def pause_campaigns_past_end_time(settings: Settings, pool=None) -> int:
     """Pause expired campaigns and persist their completed mapping state."""
     now = datetime.now(UTC)
-    mappings = await load_active_campaign_windows(settings)
+    mappings = await load_active_campaign_windows(settings,pool=pool)
     paused = 0
     for mapping in mappings:
         try:
@@ -62,7 +62,7 @@ async def pause_campaigns_past_end_time(settings: Settings) -> int:
             await pause_campaign(str(mapping["instantly_campaign_id"]), settings)
             await update_campaign_mapping(settings, str(mapping["id"]), {
                 "status": "completed", "error_detail": None,
-            })
+            },pool=pool)
             paused += 1
             logger.info("Paused Instantly campaign at its configured end time (mapping_id=%s).", mapping["id"])
         except Exception as exc:
@@ -72,12 +72,12 @@ async def pause_campaigns_past_end_time(settings: Settings) -> int:
     return paused
 
 
-async def activate_scheduled_campaigns(settings: Settings) -> int:
+async def activate_scheduled_campaigns(settings: Settings, pool=None) -> int:
     """Launch campaigns with assigned inboxes once their configured start time arrives."""
     if not settings.instantly_auto_launch or settings.send_mode != "live":
         return 0
     now = datetime.now(UTC)
-    mappings = await load_scheduled_campaign_windows(settings)
+    mappings = await load_scheduled_campaign_windows(settings,pool=pool)
     activated = 0
     for mapping in mappings:
         try:
@@ -93,25 +93,25 @@ async def activate_scheduled_campaigns(settings: Settings) -> int:
         if end_at.astimezone(UTC) <= now:
             await update_campaign_mapping(settings, str(mapping["id"]), {
                 "status": "failed", "error_detail": "Campaign window ended before its scheduled activation.",
-            })
+            },pool=pool)
             continue
         if start_at.astimezone(UTC) > now:
             continue
         await update_campaign_mapping(settings, str(mapping["id"]), {
             "status": "launching", "error_detail": "Scheduled activation submitted; confirmation is pending.",
-        })
+        },pool=pool)
         try:
             await activate_campaign(str(mapping["instantly_campaign_id"]), settings)
             await update_campaign_mapping(settings, str(mapping["id"]), {
                 "status": "active", "error_detail": None,
-            })
+            },pool=pool)
             activated += 1
         except Exception as exc:
             # Unknown outcomes remain launching so the worker never blindly repeats activation.
             if not getattr(exc, "outcome_unknown", False):
                 await update_campaign_mapping(settings, str(mapping["id"]), {
                     "status": "failed", "error_detail": f"Scheduled Instantly activation failed: {type(exc).__name__}",
-                })
+                },pool=pool)
             logger.error("Could not activate scheduled Instantly campaign (mapping_id=%s, error=%s).",
                          mapping.get("id"), type(exc).__name__)
     return activated

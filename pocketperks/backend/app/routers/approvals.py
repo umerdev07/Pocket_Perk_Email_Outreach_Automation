@@ -3,7 +3,7 @@ import hashlib
 from datetime import UTC, datetime
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field, model_validator
 
 from app.approvals_db import (get_email_review_context, list_pending_approvals,
@@ -34,34 +34,35 @@ class ClearReviewHistoryRequest(BaseModel):
 
 
 @router.get("/api/approvals")
-async def get_approval_queue(limit: int = Query(default=50, ge=1, le=100),
+async def get_approval_queue(request: Request, limit: int = Query(default=50, ge=1, le=100),
                              offset: int = Query(default=0, ge=0),
                              settings: Settings = Depends(get_settings)):
-    return await list_pending_approvals(settings, limit=limit, offset=offset)
+    return await list_pending_approvals(settings, limit=limit, offset=offset,pool=getattr(request.app.state,"postgres_pool",None))
 
 
 @router.get("/api/approvals/history")
-async def get_approval_history(limit: int = Query(default=50, ge=1, le=100),
+async def get_approval_history(request: Request, limit: int = Query(default=50, ge=1, le=100),
                                offset: int = Query(default=0, ge=0),
                                search: str = Query(default="", max_length=80),
                                days: int = Query(default=30, ge=0, le=365),
                                settings: Settings = Depends(get_settings)):
     return await list_review_history(settings, limit=limit, offset=offset, search=search,
-                                     days=days)
+                                     days=days,pool=getattr(request.app.state,"postgres_pool",None))
 
 
 @router.post("/api/approvals/history/clear")
-async def clear_approval_history(payload: ClearReviewHistoryRequest,
+async def clear_approval_history(payload: ClearReviewHistoryRequest, request: Request,
                                  settings: Settings = Depends(get_settings)):
     if not payload.confirm:
         raise HTTPException(status_code=422, detail="Confirm before clearing review history.")
-    return await clear_review_history(settings)
+    return await clear_review_history(settings,pool=getattr(request.app.state,"postgres_pool",None))
 
 
 @router.patch("/api/emails/{email_id}")
-async def edit_personalized_email(email_id: UUID, payload: EmailEdit,
+async def edit_personalized_email(email_id: UUID, payload: EmailEdit, request: Request,
                                   settings: Settings = Depends(get_settings)):
-    context = await get_email_review_context(settings, str(email_id))
+    pool=getattr(request.app.state,"postgres_pool",None)
+    context = await get_email_review_context(settings, str(email_id),pool=pool)
     if context is None:
         raise HTTPException(status_code=404, detail="Personalized email not found.")
     email = context["email"]
@@ -81,13 +82,14 @@ async def edit_personalized_email(email_id: UUID, payload: EmailEdit,
         "subject": subject, "body": body, "risk_level": risk["risk_level"],
         "risk_reason": f"Email was edited. Content-level spam check: {risk['risk_reason']}",
         "status": status, "approved_version_hash": None, "reviewed_at": None,
-    })
+    },pool=pool)
 
 
 @router.post("/api/emails/{email_id}/recheck")
-async def recheck_personalized_email(email_id: UUID, settings: Settings = Depends(get_settings)):
+async def recheck_personalized_email(email_id: UUID, request: Request, settings: Settings = Depends(get_settings)):
     """Re-run current risk rules for a queued review item; LOW goes to queue, never to sent."""
-    context = await get_email_review_context(settings, str(email_id))
+    pool=getattr(request.app.state,"postgres_pool",None)
+    context = await get_email_review_context(settings, str(email_id),pool=pool)
     if context is None:
         raise HTTPException(status_code=404, detail="Personalized email not found.")
     email = context["email"]
@@ -100,14 +102,15 @@ async def recheck_personalized_email(email_id: UUID, settings: Settings = Depend
     status = ("approved" if manual_trigger else "queued") if risk["risk_level"] == "LOW" else "pending_review"
     updated = await update_review_email(settings, str(email_id), "pending_review", {
         "risk_level": risk["risk_level"], "risk_reason": risk["risk_reason"], "status": status,
-    })
+    },pool=pool)
     return {**updated, "risk_level": risk["risk_level"], "risk_reason": risk["risk_reason"],
             "auto_queued": status == "queued", "ready_for_manual_trigger": status == "approved", "sent": False}
 
 
 @router.post("/api/emails/{email_id}/approve")
-async def approve_personalized_email(email_id: UUID, settings: Settings = Depends(get_settings)):
-    context = await get_email_review_context(settings, str(email_id))
+async def approve_personalized_email(email_id: UUID, request: Request, settings: Settings = Depends(get_settings)):
+    pool=getattr(request.app.state,"postgres_pool",None)
+    context = await get_email_review_context(settings, str(email_id),pool=pool)
     if context is None:
         raise HTTPException(status_code=404, detail="Personalized email not found.")
     email = context["email"]
@@ -125,12 +128,13 @@ async def approve_personalized_email(email_id: UUID, settings: Settings = Depend
         "status": "approved" if context.get("step", {}).get("trigger_type") == "after_conversation" else "queued",
         "reviewed_at": datetime.now(UTC).isoformat(),
         "approved_version_hash": content_hash,
-    })
+    },pool=pool)
 
 
 @router.post("/api/emails/{email_id}/reject")
-async def reject_personalized_email(email_id: UUID, settings: Settings = Depends(get_settings)):
-    context = await get_email_review_context(settings, str(email_id))
+async def reject_personalized_email(email_id: UUID, request: Request, settings: Settings = Depends(get_settings)):
+    pool=getattr(request.app.state,"postgres_pool",None)
+    context = await get_email_review_context(settings, str(email_id),pool=pool)
     if context is None:
         raise HTTPException(status_code=404, detail="Personalized email not found.")
     if context["email"]["status"] != "pending_review":
@@ -138,4 +142,4 @@ async def reject_personalized_email(email_id: UUID, settings: Settings = Depends
     return await update_review_email(settings, str(email_id), "pending_review", {
         "status": "rejected", "reviewed_at": datetime.now(UTC).isoformat(),
         "approved_version_hash": None,
-    })
+    },pool=pool)

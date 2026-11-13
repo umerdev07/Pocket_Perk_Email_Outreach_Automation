@@ -36,5 +36,6 @@ async def receive_instantly_webhook(request: Request, settings: Settings = Depen
     if not isinstance(payload, dict):
         raise HTTPException(status_code=400, detail="Webhook payload must be a JSON object.")
     digest = hashlib.sha256(body).hexdigest()
-    created = await enqueue_instantly_webhook(settings, digest, payload)
+    created = await enqueue_instantly_webhook(settings, digest, payload,
+        pool=getattr(request.app.state,"postgres_pool",None))
     return {"accepted": True, "duplicate": not created}

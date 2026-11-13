@@ -26,7 +26,7 @@ def _normalized_subject(value: object) -> str:
     return re.sub(r"^(?:(?:re|fw|fwd):\s*)+", "", subject)
 
 
-async def sync_sent_email_statuses(settings: Settings, *, campaign_offset: int = 0) -> dict[str, int]:
+async def sync_sent_email_statuses(settings: Settings, *, campaign_offset: int = 0, pool=None) -> dict[str, int]:
     """Mark rows sent only after matching a sent campaign email from Instantly.
 
     Uses Instantly's read-only emails endpoint. This path cannot launch campaigns
@@ -36,7 +36,7 @@ async def sync_sent_email_statuses(settings: Settings, *, campaign_offset: int =
     if type(campaign_offset) is not int or campaign_offset < 0:
         raise ValueError("Campaign offset must be a non-negative integer.")
     async with _SYNC_LOCK:
-        campaigns = await load_queued_campaigns(settings)
+        campaigns = await load_queued_campaigns(settings,pool=pool)
         if not campaigns:
             return {"campaigns_scanned": 0, "campaigns_available": 0, "marked_sent": 0}
 
@@ -93,7 +93,7 @@ async def sync_sent_email_statuses(settings: Settings, *, campaign_offset: int =
                 provider_id = item.get("id")
                 if not isinstance(provider_id, str) or not provider_id.strip():
                     continue
-                if await mark_email_sent(settings, str(match["id"]), provider_id, provider_sent_timestamp(item)):
+                if await mark_email_sent(settings, str(match["id"]), provider_id, provider_sent_timestamp(item),pool=pool):
                     marked += 1
                     candidates.remove(match)
 

@@ -16,10 +16,12 @@ class ReleaseRequest(BaseModel):
 
 
 @router.get("")
-async def get_suppression_management(limit: int = Query(default=100, ge=1, le=100),
+async def get_suppression_management(request: Request,
+                                    limit: int = Query(default=100, ge=1, le=100),
                                     offset: int = Query(default=0, ge=0),
                                     settings: Settings = Depends(get_settings)):
-    return await list_suppression_management(settings, limit=limit, offset=offset)
+    return await list_suppression_management(settings, limit=limit, offset=offset,
+                                             pool=getattr(request.app.state,"postgres_pool",None))
 
 
 @router.post("/{email}/release")
@@ -28,4 +30,5 @@ async def release_email_address(email: str, body: ReleaseRequest, request: Reque
     return await release_suppression(settings, email, body.reason,
                                      request.state.workspace_user["id"],
                                      recipient_confirmed=body.recipient_confirmed,
-                                     bounce_address_corrected=body.bounce_address_corrected)
+                                     bounce_address_corrected=body.bounce_address_corrected,
+                                     pool=getattr(request.app.state,"postgres_pool",None))
