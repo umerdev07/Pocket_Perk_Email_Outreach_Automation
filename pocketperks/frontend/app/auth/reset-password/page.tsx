@@ -15,9 +15,9 @@ export default function ResetPasswordPage() {
   useEffect(() => {
     const url = new URL(window.location.href);
     const fragment = new URLSearchParams(url.hash.replace(/^#/, ""));
-    const token = fragment.get("access_token") || url.searchParams.get("access_token") || "";
+    const token = url.searchParams.get("token") || fragment.get("access_token") || url.searchParams.get("access_token") || "";
     const type = fragment.get("type") || url.searchParams.get("type") || "";
-    if (token && type === "recovery") setAccessToken(token);
+    if (token && (url.searchParams.has("token") || type === "recovery")) setAccessToken(token);
     else setError("This password reset link is invalid or expired. Request a new link from the sign-in page.");
     window.history.replaceState(null, "", window.location.pathname);
   }, []);
@@ -25,7 +25,7 @@ export default function ResetPasswordPage() {
   async function submit(event: FormEvent) {
     event.preventDefault();
     setError("");
-    if (password.length < 8) { setError("Use a password with at least 8 characters."); return; }
+    if (password.length < 12) { setError("Use a password with at least 12 characters."); return; }
     if (password !== confirmation) { setError("The passwords do not match."); return; }
     setBusy(true);
     try {
@@ -46,8 +46,8 @@ export default function ResetPasswordPage() {
       <p>Choose a new password for your PocketPerks workspace account.</p>
       {error && <p className="auth-error" role="alert">{error}</p>}
       <form onSubmit={submit}>
-        <label>New password<input type="password" autoComplete="new-password" minLength={8} required value={password} onChange={event=>setPassword(event.target.value)} /></label>
-        <label>Confirm new password<input type="password" autoComplete="new-password" minLength={8} required value={confirmation} onChange={event=>setConfirmation(event.target.value)} /></label>
+        <label>New password<input type="password" autoComplete="new-password" minLength={12} required value={password} onChange={event=>setPassword(event.target.value)} /></label>
+        <label>Confirm new password<input type="password" autoComplete="new-password" minLength={12} required value={confirmation} onChange={event=>setConfirmation(event.target.value)} /></label>
         <button className="action-button" disabled={busy}>{busy ? "Updating password…" : "Update password"}</button>
       </form>
     </> : <><p className="auth-error" role="alert">{error || "Checking your reset link…"}</p><a className="auth-reset-link" href="/">Back to sign in</a></>}

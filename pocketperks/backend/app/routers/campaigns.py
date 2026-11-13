@@ -1,12 +1,10 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel, Field, model_validator
 from datetime import UTC, date, datetime, time
 from zoneinfo import ZoneInfo
 from uuid import UUID
 
-from app.campaigns_db import (create_campaign, delete_campaign, delete_campaign_step,
-                              get_campaign, list_campaigns, update_campaign)
-from app.config import Settings, get_settings
+from app import campaigns_postgres
 
 router = APIRouter(prefix="/api/campaigns", tags=["campaigns"])
 
@@ -83,6 +81,13 @@ class CampaignUpdate(CampaignCreate):
     """Full replacement of editable campaign setup before its first run."""
 
 
+async def _campaign_call(request: Request, function: str, *args):
+    pool = getattr(request.app.state, "postgres_pool", None)
+    if pool is None:
+        raise HTTPException(status_code=503, detail="Campaign storage is temporarily unavailable.")
+    return await getattr(campaigns_postgres, function)(pool, *args)
+
+
 def _resolve_local_time(value: datetime, zone: ZoneInfo) -> datetime:
     """Interpret datetime-local values in the supplied IANA zone; reject DST gaps/folds."""
     candidate = value.replace(tzinfo=zone)
@@ -96,39 +101,38 @@ def _resolve_local_time(value: datetime, zone: ZoneInfo) -> datetime:
 
 
 @router.post("")
-async def create_campaign_endpoint(payload: CampaignCreate, settings: Settings = Depends(get_settings)):
+async def create_campaign_endpoint(payload: CampaignCreate, request: Request):
     campaign = payload.model_dump(mode="json", exclude={"contexts", "step_delays_minutes", "step_triggers"}) | {"status": "draft"}
-    result = await create_campaign(settings, campaign, payload.contexts, payload.step_delays_minutes, payload.step_triggers)
+    result = await _campaign_call(request, "create_campaign", campaign, payload.contexts,
+                                  payload.step_delays_minutes, payload.step_triggers)
     return result
 
 
 @router.get("")
-async def list_campaigns_endpoint(settings: Settings = Depends(get_settings)):
-    return await list_campaigns(settings)
+async def list_campaigns_endpoint(request: Request):
+    return await _campaign_call(request, "list_campaigns")
 
 
 @router.patch("/{campaign_id}")
-async def update_campaign_endpoint(campaign_id: UUID, payload: CampaignUpdate,
-                                   settings: Settings = Depends(get_settings)):
+async def update_campaign_endpoint(campaign_id: UUID, payload: CampaignUpdate, request: Request):
     campaign = payload.model_dump(mode="json", exclude={"contexts", "step_delays_minutes", "step_triggers"})
-    return await update_campaign(settings, str(campaign_id), campaign, payload.contexts,
-                                 payload.step_delays_minutes, payload.step_triggers)
+    return await _campaign_call(request, "update_campaign", str(campaign_id), campaign,
+                                payload.contexts, payload.step_delays_minutes, payload.step_triggers)
 
 
 @router.get("/{campaign_id}")
-async def get_campaign_endpoint(campaign_id: str, settings: Settings = Depends(get_settings)):
-    result = await get_campaign(settings, campaign_id)
+async def get_campaign_endpoint(campaign_id: str, request: Request):
+    result = await _campaign_call(request, "get_campaign", campaign_id)
     if result is None:
         raise HTTPException(status_code=404, detail="Campaign not found.")
     return result
 
 
 @router.delete("/{campaign_id}/steps/{step_id}")
-async def delete_campaign_step_endpoint(campaign_id: UUID, step_id: UUID,
-                                        settings: Settings = Depends(get_settings)):
-    return await delete_campaign_step(settings, str(campaign_id), str(step_id))
+async def delete_campaign_step_endpoint(campaign_id: UUID, step_id: UUID, request: Request):
+    return await _campaign_call(request, "delete_campaign_step", str(campaign_id), str(step_id))
 
 
 @router.delete("/{campaign_id}", status_code=204)
-async def delete_campaign_endpoint(campaign_id: UUID, settings: Settings = Depends(get_settings)):
-    await delete_campaign(settings, str(campaign_id))
+async def delete_campaign_endpoint(campaign_id: UUID, request: Request):
+    await _campaign_call(request, "delete_campaign", str(campaign_id))

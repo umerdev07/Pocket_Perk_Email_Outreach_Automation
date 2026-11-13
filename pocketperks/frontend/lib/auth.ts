@@ -1,137 +1,87 @@
-import { hideTechnicalErrorDetails, userFacingError } from "./api";
+import { hideTechnicalErrorDetails } from "./api";
 
 export type WorkspaceRole = "admin" | "operator" | "reviewer";
 
 export type AuthSession = {
   access_token: string;
-  refresh_token: string;
   expires_at: number;
   user: { id: string; email?: string };
 };
 
-const storageKey = "pocketperks.auth.session";
 let refreshInProgress: Promise<AuthSession | null> | null = null;
+let memorySession: AuthSession | null = null;
 
-function authConfig() {
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL?.replace(/\/$/, "");
-  const key = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-  if (!url || !key) throw new Error("Sign-in is temporarily unavailable. Please contact your workspace admin.");
-  return { url, key };
+function apiBase() {
+  return "";
 }
 
-function safeAuthError(data: Record<string, unknown>, fallback: string) {
-  const detail = [data.msg, data.message, data.error_description]
-    .find((value): value is string => typeof value === "string")?.toLowerCase() || "";
-  if (detail.includes("invalid login credentials")) return "That email and password do not match. Please try again.";
-  if (detail.includes("email not confirmed")) return "Please confirm your email address before signing in.";
-  if (detail.includes("already registered") || detail.includes("already exists")) return "That email address is already in use.";
-  if (detail.includes("password") && detail.includes("short")) return "Choose a longer password and try again.";
-  return fallback;
-}
-
-function getStoredSession(): AuthSession | null {
-  if (typeof window === "undefined") return null;
-  try {
-    const parsed = JSON.parse(window.localStorage.getItem(storageKey) || "null") as AuthSession | null;
-    return parsed?.access_token && parsed?.refresh_token ? parsed : null;
-  } catch {
-    return null;
+async function readResponse(response: Response, fallback: string) {
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const message = typeof data.detail === "string" ? data.detail : fallback;
+    throw new Error(message);
   }
+  return data;
 }
 
-function saveSession(session: AuthSession) {
-  window.localStorage.setItem(storageKey, JSON.stringify(session));
-}
-
-async function authRequest(path: string, body: Record<string, string>, token?: string) {
-  const { url, key } = authConfig();
+async function postAuth(path: string, body: Record<string, string>, token?: string) {
   let response: Response;
   try {
-    response = await fetch(`${url}/auth/v1/${path}`, {
+    response = await fetch(`${apiBase()}/api/auth/${path}`, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        apikey: key,
-        ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      },
+      credentials: "include",
+      headers: { "Content-Type": "application/json", ...(token ? { Authorization: `Bearer ${token}` } : {}) },
       body: JSON.stringify(body),
     });
   } catch {
     throw new Error("We couldn't connect to sign-in. Check your internet connection and try again.");
   }
-  const data = await response.json().catch(() => ({}));
-  if (!response.ok) {
-    throw new Error(safeAuthError(data, "We couldn't sign you in. Check your email and password, then try again."));
-  }
-  return data;
+  return readResponse(response, "We couldn't complete that sign-in request. Please try again.");
+}
+
+function asSession(data: Record<string, unknown>): AuthSession {
+  return {
+    access_token: String(data.access_token || ""),
+    expires_at: Number(data.expires_at || Math.floor(Date.now() / 1000) + Number(data.expires_in || 900)),
+    user: data.user as AuthSession["user"],
+  };
 }
 
 export async function signIn(email: string, password: string): Promise<AuthSession> {
-  const data = await authRequest("token?grant_type=password", { email, password });
-  const session: AuthSession = { ...data, expires_at: data.expires_at || Math.floor(Date.now() / 1000) + (data.expires_in || 3600) };
-  saveSession(session);
+  const session = asSession(await postAuth("sign-in", { email, password }));
+  if (!session.access_token || !session.user?.id) {
+    throw new Error("We couldn't verify your workspace sign-in. Please try again.");
+  }
+  memorySession = session;
   return session;
 }
 
 export async function requestPasswordReset(email: string): Promise<void> {
-  const redirectTo = `${window.location.origin}/auth/reset-password`;
-  await authRequest(`recover?redirect_to=${encodeURIComponent(redirectTo)}`, { email });
+  await postAuth("password-reset", { email });
 }
 
-export async function setNewPassword(accessToken: string, password: string): Promise<void> {
-  const { url, key } = authConfig();
-  let response: Response;
-  try {
-    response = await fetch(`${url}/auth/v1/user`, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json", apikey: key, Authorization: `Bearer ${accessToken}` },
-      body: JSON.stringify({ password }),
-    });
-  } catch {
-    throw new Error("We couldn't connect to sign-in. Check your internet connection and try again.");
-  }
-  if (!response.ok) {
-    const data = await response.json().catch(() => ({}));
-    throw new Error(safeAuthError(data, "This password reset link may have expired. Request a new link and try again."));
-  }
+export async function setNewPassword(token: string, password: string): Promise<void> {
+  await postAuth("password-reset/confirm", { token, password });
 }
 
 export async function requestEmailChange(email: string): Promise<void> {
-  const session = await currentSession();
-  if (!session) throw new Error("Please sign in again before changing your email.");
-
-  const { url, key } = authConfig();
-  let response: Response;
-  try {
-    response = await fetch(`${url}/auth/v1/user`, {
-      method: "PUT",
-      headers: {
-        "Content-Type": "application/json",
-        apikey: key,
-        Authorization: `Bearer ${session.access_token}`,
-      },
-      body: JSON.stringify({ email }),
-    });
-  } catch {
-    throw new Error("We couldn't connect to sign-in. Check your internet connection and try again.");
-  }
-
-  if (!response.ok) {
-    const data = await response.json().catch(() => ({}));
-    throw new Error(safeAuthError(data, "We couldn't request this email change. Check the address and try again."));
-  }
+  const response = await apiFetch(`${apiBase()}/api/auth/email-change`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ email }),
+  });
+  await readResponse(response, "We couldn't request the email change. Check the address and try again.");
 }
 
-async function refreshSession(existing: AuthSession): Promise<AuthSession | null> {
+async function refreshSession(): Promise<AuthSession | null> {
   if (!refreshInProgress) {
-    refreshInProgress = authRequest("token?grant_type=refresh_token", { refresh_token: existing.refresh_token })
+    refreshInProgress = postAuth("refresh", {})
       .then(data => {
-        const next: AuthSession = { ...data, expires_at: data.expires_at || Math.floor(Date.now() / 1000) + (data.expires_in || 3600) };
-        saveSession(next);
+        const next = asSession(data);
+        if (!next.access_token || !next.user?.id) throw new Error("Invalid session response");
+        memorySession = next;
         return next;
       })
       .catch(() => {
-        window.localStorage.removeItem(storageKey);
+        memorySession = null;
         return null;
       })
       .finally(() => { refreshInProgress = null; });
@@ -140,18 +90,14 @@ async function refreshSession(existing: AuthSession): Promise<AuthSession | null
 }
 
 export async function currentSession(): Promise<AuthSession | null> {
-  const session = getStoredSession();
-  if (!session) return null;
-  if (session.expires_at > Math.floor(Date.now() / 1000) + 60) return session;
-  return refreshSession(session);
+  if (memorySession && memorySession.expires_at > Math.floor(Date.now() / 1000) + 60) return memorySession;
+  return refreshSession();
 }
 
 export async function signOut() {
-  const session = getStoredSession();
-  if (session) {
-    try { await authRequest("logout", {}, session.access_token); } catch { /* Clear local access even if sign-out endpoint is offline. */ }
-  }
-  window.localStorage.removeItem(storageKey);
+  try { await postAuth("sign-out", {}, memorySession?.access_token); }
+  catch { /* Always clear local credentials if the service is unavailable. */ }
+  memorySession = null;
 }
 
 export async function apiFetch(input: RequestInfo | URL, init: RequestInit = {}): Promise<Response> {
@@ -160,13 +106,13 @@ export async function apiFetch(input: RequestInfo | URL, init: RequestInit = {})
     const headers = new Headers(input instanceof Request ? input.headers : undefined);
     new Headers(init.headers).forEach((value, key) => headers.set(key, value));
     if (accessToken) headers.set("Authorization", `Bearer ${accessToken}`);
-    return fetch(input, { ...init, headers }).catch(() => {
+    return fetch(input, { ...init, credentials: "include", headers }).catch(() => {
       throw new Error("We couldn't connect to your workspace. Check your connection and try again.");
     }).then(hideTechnicalErrorDetails);
   };
   let response = await send(session?.access_token);
   if (response.status === 401 && session) {
-    session = await refreshSession(session);
+    session = await refreshSession();
     if (session) response = await send(session.access_token);
   }
   return response;

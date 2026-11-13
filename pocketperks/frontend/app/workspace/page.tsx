@@ -51,7 +51,7 @@ export default function Home(){
  const [startedRunKeys,setStartedRunKeys]=useState<string[]>([]);const selectedRunKey=campaignId&&batchId?`${campaignId}:${batchId}`:"";const alreadyStartedThisRun=!!selectedRunKey&&startedRunKeys.includes(selectedRunKey);
  const [batchDeleteBusy,setBatchDeleteBusy]=useState("");const [selectedBatchId,setSelectedBatchId]=useState("");
  const [name,setName]=useState(""),[total,setTotal]=useState(1),[startAt,setStartAt]=useState(""),[endAt,setEndAt]=useState(""),[instructions,setInstructions]=useState(""),[contexts,setContexts]=useState<string[]>([""]),[stepDelayValues,setStepDelayValues]=useState<number[]>([0]),[stepDelayUnits,setStepDelayUnits]=useState<Array<"minutes"|"hours"|"days">>(["days"]),[stepTriggers,setStepTriggers]=useState<Array<"scheduled"|"after_conversation"|"close_loop">>(["scheduled"]),[sendingDays,setSendingDays]=useState<number[]>([1,2,3,4,5]),[dailySendStart,setDailySendStart]=useState("09:00"),[dailySendEnd,setDailySendEnd]=useState("17:00"),[localTimezone,setLocalTimezone]=useState("Europe/London"); const input=useRef<HTMLInputElement>(null);
- const apiBase=(process.env.NEXT_PUBLIC_API_URL||"http://localhost:8000").replace(/\/$/,"");
+ const apiBase="";
  async function loadBatches(){try{const res=await apiFetch(`${apiBase}/api/lead-batches`);const data=await res.json();if(!res.ok)throw Error(data.detail||"Could not load import history.");setBatches(data)}catch(e){setError(e instanceof Error?e.message:"Could not load import history.")}}
  useEffect(()=>{setLocalTimezone(Intl.DateTimeFormat().resolvedOptions().timeZone||"UTC")},[]);
  useEffect(()=>{if(user.role!=="reviewer")void loadBatches()},[user.role]);

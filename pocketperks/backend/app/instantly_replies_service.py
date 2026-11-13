@@ -9,15 +9,15 @@ from app.replies_db import (get_reply_sync_state, save_received_replies,
 
 _SYNC_LOCK = asyncio.Lock()
 
-async def sync_recent_replies(settings: Settings, *, max_pages: int = 1) -> dict[str, int]:
+async def sync_recent_replies(settings: Settings, *, max_pages: int = 1, pool=None) -> dict[str, int]:
     if type(max_pages) is not int or not 1 <= max_pages <= 5:
         raise ValueError("Reply sync must use between one and five pages.")
     async with _SYNC_LOCK:
-        return await _sync_recent_replies(settings, max_pages=max_pages)
+        return await _sync_recent_replies(settings, max_pages=max_pages, pool=pool)
 
 
-async def _sync_recent_replies(settings: Settings, *, max_pages: int) -> dict[str, int]:
-    state = await get_reply_sync_state(settings)
+async def _sync_recent_replies(settings: Settings, *, max_pages: int, pool=None) -> dict[str, int]:
+    state = (await get_reply_sync_state(settings) if pool is None else await get_reply_sync_state(settings,pool=pool))
     now = datetime.now(UTC)
     sync_from = state.get("sync_from")
     if not sync_from:
@@ -31,11 +31,12 @@ async def _sync_recent_replies(settings: Settings, *, max_pages: int) -> dict[st
                                           min_timestamp_created=sync_from)
         items = page["items"]
         fetched += len(items)
-        saved += await save_received_replies(settings, items)
+        saved += (await save_received_replies(settings, items) if pool is None
+                  else await save_received_replies(settings, items,pool=pool))
         next_cursor = page.get("next_starting_after")
         if not next_cursor:
             await update_reply_sync_state(settings, last_checked_at=now.isoformat(),
-                                          sync_from=None, starting_after=None)
+                                          sync_from=None, starting_after=None,pool=pool)
             break
         if next_cursor in seen_cursors:
             break
@@ -43,5 +44,5 @@ async def _sync_recent_replies(settings: Settings, *, max_pages: int) -> dict[st
         cursor = next_cursor
         # Save the cursor only after the page has been persisted. A restart can
         # safely repeat that page because provider email IDs are unique locally.
-        await update_reply_sync_state(settings, sync_from=sync_from, starting_after=cursor)
+        await update_reply_sync_state(settings, sync_from=sync_from, starting_after=cursor,pool=pool)
     return {"fetched": fetched, "saved": saved}

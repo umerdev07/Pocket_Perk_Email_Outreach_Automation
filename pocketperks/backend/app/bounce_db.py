@@ -1,26 +1,12 @@
-"""Normalize provider bounce notifications and block unsafe future sends."""
+"""Persist Instantly bounce events and conservatively suppress unsafe addresses."""
+
 from datetime import UTC, datetime
 import re
 
-import httpx
 from fastapi import HTTPException
 
 from app.config import Settings
-from app.suppression_db import normalize_email, save_suppressions
-
-
-def _base(settings: Settings) -> str:
-    if not settings.supabase_url or not settings.supabase_service_key:
-        raise HTTPException(status_code=503, detail="Database is not configured for bounce tracking.")
-    return f"{settings.supabase_url.rstrip('/')}/rest/v1"
-
-
-def _headers(settings: Settings, prefer: str | None = None) -> dict[str, str]:
-    key = settings.supabase_service_key
-    headers = {"apikey": key, "Authorization": f"Bearer {key}", "Content-Type": "application/json"}
-    if prefer:
-        headers["Prefer"] = prefer
-    return headers
+from app.suppression_db import normalize_email
 
 
 def _text(value: object, limit: int = 500) -> str | None:
@@ -28,21 +14,18 @@ def _text(value: object, limit: int = 500) -> str | None:
         value = value.get("message") or value.get("reason") or value.get("response") or value.get("code")
     if not isinstance(value, (str, int, float)):
         return None
-    result = " ".join(str(value).split())
-    return result[:limit] or None
+    return " ".join(str(value).split())[:limit] or None
 
 
 def _bounce_type(payload: dict) -> str:
-    raw = " ".join(_text(payload.get(key), 200) or "" for key in (
-        "bounce_type", "bounceType", "classification", "bounce_status", "smtp_code", "status_code", "code"
-    )).casefold()
-    reason = " ".join(_text(payload.get(key), 500) or "" for key in (
-        "bounce_reason", "reason", "error", "error_message", "smtp_response", "response"
-    )).casefold()
+    raw = " ".join(_text(payload.get(k), 200) or "" for k in
+        ("bounce_type", "bounceType", "classification", "bounce_status", "smtp_code", "status_code", "code")).casefold()
+    reason = " ".join(_text(payload.get(k), 500) or "" for k in
+        ("bounce_reason", "reason", "error", "error_message", "smtp_response", "response")).casefold()
     combined = f"{raw} {reason}"
-    if any(token in combined for token in ("hard", "permanent", "invalid recipient", "user unknown", "mailbox not found")):
+    if any(x in combined for x in ("hard", "permanent", "invalid recipient", "user unknown", "mailbox not found")):
         return "hard"
-    if any(token in combined for token in ("soft", "temporary", "transient", "mailbox full", "try again")):
+    if any(x in combined for x in ("soft", "temporary", "transient", "mailbox full", "try again")):
         return "soft"
     if re.search(r"\b5[.\s-]?\d{1,2}[.\s-]?\d{1,2}\b|\b5\d{2}\b", combined):
         return "hard"
@@ -59,7 +42,7 @@ def _event_time(payload: dict) -> str:
                 parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
                 return (parsed.replace(tzinfo=UTC) if parsed.tzinfo is None else parsed).astimezone(UTC).isoformat()
             except ValueError:
-                continue
+                pass
     return datetime.now(UTC).isoformat()
 
 
@@ -74,83 +57,9 @@ def _step_number(payload: dict) -> int | None:
     return parsed if 1 <= parsed <= 10 else None
 
 
-async def _update_local_email_steps(client, base: str, headers: dict[str, str], *, run_id: str,
-                                   lead_id: str, step_number: int | None, bounce_type: str,
-                                   reason: str | None, event_at: str) -> None:
-    """Reflect a provider bounce and retire queued follow-ups for this recipient."""
-    rows = await _rows(await client.get(f"{base}/personalized_emails", params={
-        "select": "id,status,campaign_steps(step_number)", "run_id": f"eq.{run_id}",
-        "lead_id": f"eq.{lead_id}", "status": "in.(queued,sent)", "limit": "20",
-    }, headers=headers), "Could not load local email steps for the bounce event.")
-    if not rows:
-        return
-    steps: list[tuple[int, dict]] = []
-    for row in rows:
-        relation = row.get("campaign_steps")
-        if isinstance(relation, list):
-            relation = relation[0] if relation else {}
-        number = relation.get("step_number") if isinstance(relation, dict) else None
-        if type(number) is int:
-            steps.append((number, row))
-    target_step = step_number
-    if target_step is None:
-        # We cannot safely claim which message bounced without a provider step.
-        # Still retire queued follow-ups because the provider stops the sequence.
-        future_rows = [row for _, row in steps if row.get("status") == "queued"]
-        for row in future_rows:
-            response = await client.patch(f"{base}/personalized_emails", params={
-                "id": f"eq.{row['id']}", "status": "eq.queued",
-            }, headers=_headers_from(headers, "return=minimal"), json={
-                "status": "cancelled", "send_error": "Stopped by the sending provider after a bounce.",
-            })
-            if not response.is_success:
-                raise HTTPException(status_code=503, detail="Could not stop follow-up steps after a bounce.")
-        return
-
-    target = next((row for number, row in steps if number == target_step), None)
-    if target:
-        response = await client.patch(f"{base}/personalized_emails", params={
-            "id": f"eq.{target['id']}", "status": "in.(queued,sent)",
-        }, headers=_headers_from(headers, "return=minimal"), json={
-            "status": "bounced", "bounced_at": event_at, "bounce_type": bounce_type,
-            "send_error": reason or "The recipient mail server rejected this email.",
-        })
-        if not response.is_success:
-            raise HTTPException(status_code=503, detail="Could not update the bounced email status.")
-    for number, row in steps:
-        if number <= target_step or row.get("status") != "queued":
-            continue
-        response = await client.patch(f"{base}/personalized_emails", params={
-            "id": f"eq.{row['id']}", "status": "eq.queued",
-        }, headers=_headers_from(headers, "return=minimal"), json={
-            "status": "cancelled", "send_error": "Stopped by the sending provider after an earlier bounce.",
-        })
-        if not response.is_success:
-            raise HTTPException(status_code=503, detail="Could not stop follow-up steps after a bounce.")
-
-
-def _headers_from(headers: dict[str, str], prefer: str) -> dict[str, str]:
-    return {**headers, "Prefer": prefer}
-
-
-async def _rows(response: httpx.Response, detail: str) -> list[dict]:
-    if not response.is_success:
-        raise HTTPException(status_code=503, detail=detail)
-    try:
-        rows = response.json()
-    except (ValueError, TypeError) as exc:
-        raise HTTPException(status_code=503, detail=detail) from exc
-    if not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows):
-        raise HTTPException(status_code=503, detail=detail)
-    return rows
-
-
-async def save_bounce_event(settings: Settings, event_key: str, payload: dict) -> None:
-    """Persist minimal bounce details and conservatively block hard/unknown addresses.
-
-    Soft bounces are tracked but not globally blocked because they can be temporary.
-    Instantly itself stops the bounced lead's remaining sequence.
-    """
+async def save_bounce_event(settings: Settings, event_key: str, payload: dict, pool=None) -> None:
+    if pool is None:
+        raise HTTPException(status_code=503, detail="PostgreSQL is unavailable for bounce tracking.")
     nested = payload.get("data") or payload.get("payload")
     if isinstance(nested, dict):
         payload = {**payload, **nested}
@@ -165,89 +74,60 @@ async def save_bounce_event(settings: Settings, event_key: str, payload: dict) -
         reason = _text(payload.get(key))
         if reason:
             break
-    if not reason:
-        reason = "Bounce type could not be determined from the provider event." if bounce_type == "unknown" else None
+    if not reason and bounce_type == "unknown":
+        reason = "Bounce type could not be determined from the provider event."
     email_account = _text(payload.get("email_account") or payload.get("emailAccount"), 320)
-    base, headers = _base(settings), _headers(settings)
-    campaign_mapping = None
-    run_id = campaign_id = lead_id = None
-
-    async with httpx.AsyncClient(timeout=20) as client:
-        if provider_campaign_id:
-            mappings = await _rows(await client.get(f"{base}/instantly_campaign_mappings", params={
-                "select": "id,run_id", "instantly_campaign_id": f"eq.{provider_campaign_id}", "limit": "1",
-            }, headers=headers), "Could not match the bounce to its campaign.")
-            campaign_mapping = mappings[0] if mappings else None
-        if campaign_mapping:
-            run_id = campaign_mapping.get("run_id")
-            runs = await _rows(await client.get(f"{base}/campaign_runs", params={
-                "select": "campaign_id", "id": f"eq.{run_id}", "limit": "1",
-            }, headers=headers), "Could not match the bounce to its campaign run.")
-            campaign_id = runs[0].get("campaign_id") if runs else None
-        lead_rows = []
-        if email:
-            lead_rows = await _rows(await client.get(f"{base}/leads", params={
-                "select": "id", "email": f"eq.{email}", "limit": "1",
-            }, headers=headers), "Could not match the bounced address to a lead.")
-            lead_id = lead_rows[0].get("id") if lead_rows else None
-        matched = False
-        if campaign_mapping and lead_id:
-            mapped = await _rows(await client.get(f"{base}/instantly_lead_mappings", params={
-                "select": "id", "campaign_mapping_id": f"eq.{campaign_mapping['id']}",
-                "lead_id": f"eq.{lead_id}", "status": "eq.synced", "limit": "1",
-            }, headers=headers), "Could not verify the bounced lead's campaign mapping.")
-            matched = bool(mapped)
-
-        event_at = _event_time(payload)
-        step_number = _step_number(payload)
-        if matched and run_id and lead_id:
-            await _update_local_email_steps(client, base, headers, run_id=str(run_id), lead_id=str(lead_id),
-                step_number=step_number, bounce_type=bounce_type, reason=reason, event_at=event_at)
-
-        insert = await client.post(f"{base}/instantly_bounce_events", params={"on_conflict": "event_key"},
-            headers=_headers(settings, "resolution=ignore-duplicates,return=minimal"), json={
-                "event_key": event_key,
-                "provider_campaign_id": provider_campaign_id,
-                "campaign_mapping_id": campaign_mapping.get("id") if campaign_mapping else None,
-                "run_id": run_id,
-                "campaign_id": campaign_id,
-                "lead_id": lead_id,
-                "email": email,
-                "bounce_type": bounce_type,
-                "reason": reason,
-                "step_number": step_number,
-                "email_account": email_account,
-                "event_at": event_at,
-                "match_status": "matched" if matched else "unmatched",
-            })
-        if not insert.is_success:
-            raise HTTPException(status_code=503, detail="Could not save the bounce notification.")
-
-    if email and bounce_type in {"hard", "unknown"}:
-        description = "Hard bounce" if bounce_type == "hard" else "Unclassified bounce; verify this address before future emails."
-        if reason:
-            description += f": {reason}"
-        await save_suppressions(settings, [{
-            "email": email,
-            "source": "bounce_auto",
-            "reason": description,
-            "lead_id": lead_id,
-            "campaign_id": campaign_id,
-        }])
+    event_at, step_number = _event_time(payload), _step_number(payload)
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            mapping = await conn.fetchrow("select id,run_id from public.instantly_campaign_mappings where instantly_campaign_id=$1", provider_campaign_id) if provider_campaign_id else None
+            run_id = str(mapping["run_id"]) if mapping else None
+            campaign_id = await conn.fetchval("select campaign_id from public.campaign_runs where id=$1::uuid", run_id) if run_id else None
+            lead_id = await conn.fetchval("select id from public.leads where email=$1", email) if email else None
+            matched = bool(mapping and lead_id and await conn.fetchval("""select exists(select 1 from public.instantly_lead_mappings
+                where campaign_mapping_id=$1::uuid and lead_id=$2::uuid and status='synced')""", mapping["id"], lead_id))
+            inserted = await conn.fetchval("""insert into public.instantly_bounce_events(event_key,provider_campaign_id,campaign_mapping_id,
+                run_id,campaign_id,lead_id,email,bounce_type,reason,step_number,email_account,event_at,match_status)
+                values($1,$2,$3::uuid,$4::uuid,$5::uuid,$6::uuid,$7,$8,$9,$10,$11,$12::timestamptz,$13)
+                on conflict(event_key) do nothing returning event_key""", event_key, provider_campaign_id,
+                str(mapping["id"]) if mapping else None, run_id, str(campaign_id) if campaign_id else None,
+                str(lead_id) if lead_id else None, email, bounce_type, reason, step_number, email_account,
+                event_at, "matched" if matched else "unmatched")
+            if not inserted:
+                return
+            if matched and run_id and lead_id:
+                if step_number is None:
+                    await conn.execute("""update public.personalized_emails set status='cancelled',
+                        send_error='Stopped by the sending provider after a bounce.'
+                        where run_id=$1::uuid and lead_id=$2::uuid and status='queued'""", run_id, lead_id)
+                else:
+                    await conn.execute("""update public.personalized_emails pe set status='bounced',bounced_at=$3::timestamptz,
+                        bounce_type=$4,send_error=$5 from public.campaign_steps s where pe.step_id=s.id and pe.run_id=$1::uuid
+                        and pe.lead_id=$2::uuid and s.step_number=$6 and pe.status in ('queued','sent')""", run_id, lead_id,
+                        event_at, bounce_type, reason or "The recipient mail server rejected this email.", step_number)
+                    await conn.execute("""update public.personalized_emails pe set status='cancelled',
+                        send_error='Stopped by the sending provider after an earlier bounce.' from public.campaign_steps s
+                        where pe.step_id=s.id and pe.run_id=$1::uuid and pe.lead_id=$2::uuid and s.step_number>$3 and pe.status='queued'""",
+                        run_id, lead_id, step_number)
+            if email and bounce_type in {"hard", "unknown"}:
+                description = "Hard bounce" if bounce_type == "hard" else "Unclassified bounce; verify this address before future emails."
+                if reason:
+                    description += f": {reason}"
+                await conn.fetchval("select public.record_email_suppressions($1::jsonb)", [{"email": email,
+                    "source": "bounce_auto", "reason": description, "lead_id": str(lead_id) if lead_id else None,
+                    "campaign_id": str(campaign_id) if campaign_id else None}])
 
 
-async def get_bounce_summary(settings: Settings) -> dict:
-    base = _base(settings)
-    async with httpx.AsyncClient(timeout=15) as client:
-        response = await client.post(f"{base}/rpc/dashboard_bounce_summary", headers=_headers(settings), json={})
-    if not response.is_success:
-        raise HTTPException(status_code=503, detail="Could not load bounce activity.")
-    try:
-        value = response.json()
-    except (ValueError, TypeError) as exc:
-        raise HTTPException(status_code=503, detail="Could not load bounce activity.") from exc
-    if isinstance(value, dict):
-        return value
-    if isinstance(value, list) and value and isinstance(value[0], dict):
-        return value[0]
-    raise HTTPException(status_code=503, detail="Bounce activity response was invalid.")
+async def get_bounce_summary(settings: Settings, pool=None) -> dict:
+    if pool is None:
+        raise HTTPException(status_code=503, detail="PostgreSQL is unavailable for bounce activity.")
+    async with pool.acquire() as conn:
+        counts = await conn.fetchrow("""select count(*) total,count(*) filter(where bounce_type='hard') hard,
+            count(*) filter(where bounce_type='soft') soft,count(*) filter(where bounce_type='unknown') unknown
+            from public.instantly_bounce_events""")
+        recent = await conn.fetch("""select b.event_key,b.email,b.bounce_type,b.reason,b.step_number,b.email_account,b.event_at,
+            b.match_status,l.business_name,c.name campaign_name from public.instantly_bounce_events b
+            left join public.leads l on l.id=b.lead_id left join public.campaigns c on c.id=b.campaign_id
+            order by b.event_at desc limit 10""")
+    return {"available": True, **{key: int(counts[key] or 0) for key in ("total", "hard", "soft", "unknown")},
+            "recent": [dict(row) for row in recent]}

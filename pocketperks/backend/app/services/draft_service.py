@@ -2,8 +2,6 @@
 import json
 
 from app.config import Settings
-from app.drafts_db import (demote_campaign, get_draft_context, load_campaign,
-                           prepare_step_draft, set_generation_state, upsert_step_draft)
 from app.integrations.claude_client import (
     ClaudeAPIError, ClaudeAuthenticationError, ClaudeBadResponseError,
     ClaudeRateLimitedError, ClaudeTimeoutError, MissingClaudeAPIKeyError,
@@ -13,6 +11,47 @@ from app.services.outreach_guidance import APPROVED_PRODUCT_FACTS
 from app.services.outreach_copy_guard import (
     OutreachCopyValidationError, generate_validated_copy,
 )
+
+
+async def _load_campaign(settings, campaign_id, pool=None):
+    if pool is None:
+        raise RuntimeError("PostgreSQL is required for draft generation.")
+    from app.drafts_postgres import load_campaign
+    return await load_campaign(pool, campaign_id)
+
+
+async def _save_draft(settings, step_id, subject, body, pool=None):
+    if pool is None:
+        raise RuntimeError("PostgreSQL is required to save campaign drafts.")
+    from app.drafts_postgres import upsert_step_draft
+    return await upsert_step_draft(pool, step_id, subject, body)
+
+
+async def _set_state(settings, draft_id, state, error=None, pool=None):
+    if pool is None:
+        raise RuntimeError("PostgreSQL is required to update draft state.")
+    from app.drafts_postgres import set_generation_state
+    return await set_generation_state(pool, draft_id, state, error)
+
+
+async def _prepare(settings, step_id, pool=None):
+    if pool is None:
+        raise RuntimeError("PostgreSQL is required to prepare campaign drafts.")
+    from app.drafts_postgres import prepare_step_draft
+    return await prepare_step_draft(pool, step_id)
+
+
+async def _get_context(settings, draft_id, pool=None):
+    if pool is None:
+        raise RuntimeError("PostgreSQL is required to load draft context.")
+    from app.drafts_postgres import get_draft_context
+    return await get_draft_context(pool, draft_id)
+
+
+async def _demote(settings, campaign_id, pool=None):
+    if pool is None:
+        raise RuntimeError("PostgreSQL is required to update campaign status.")
+    await pool.execute("update public.campaigns set status='draft' where id=$1::uuid", campaign_id)
 
 
 def _safe_failure(exc: Exception) -> tuple[str, str]:
@@ -71,8 +110,8 @@ def _prompt(campaign: dict, step: dict, previous: list[dict]) -> list[dict]:
             {"role": "user", "content": json.dumps(user, ensure_ascii=False)}]
 
 
-async def generate_campaign_drafts(settings: Settings, campaign_id: str) -> dict:
-    campaign = await load_campaign(settings, campaign_id)
+async def generate_campaign_drafts(settings: Settings, campaign_id: str, pool=None) -> dict:
+    campaign = await _load_campaign(settings, campaign_id, pool)
     if campaign is None:
         return {"error": "not_found"}
     steps = sorted(campaign.get("campaign_steps", []), key=lambda item: item["step_number"])
@@ -82,7 +121,7 @@ async def generate_campaign_drafts(settings: Settings, campaign_id: str) -> dict
             subject, body = await generate_validated_copy(
                 _prompt(campaign, step, prior), settings, campaign=campaign, step=step,
                 generator=chat_completion_json)
-            draft = await upsert_step_draft(settings, step["id"], subject, body)
+            draft = await _save_draft(settings, step["id"], subject, body, pool)
             created.append(draft)
             prior.append({"subject": subject, "body": body})
         except Exception as exc:
@@ -105,27 +144,27 @@ def _previous_steps(campaign: dict, step_number: int) -> list[dict]:
     return previous
 
 
-async def _generate_one_step(settings: Settings, campaign: dict, step: dict) -> dict:
+async def _generate_one_step(settings: Settings, campaign: dict, step: dict, pool=None) -> dict:
     subject, body = await generate_validated_copy(
         _prompt(campaign, step, _previous_steps(campaign, int(step["step_number"]))),
         settings, campaign=campaign, step=step, generator=chat_completion_json)
-    return await upsert_step_draft(settings, step["id"], subject, body)
+    return await _save_draft(settings, step["id"], subject, body, pool)
 
 
-async def queue_campaign_draft_generation(settings: Settings, campaign_id: str) -> dict:
+async def queue_campaign_draft_generation(settings: Settings, campaign_id: str, pool=None) -> dict:
     """Persist visible generating states before handing draft work to a background task."""
-    campaign = await load_campaign(settings, campaign_id)
+    campaign = await _load_campaign(settings, campaign_id, pool)
     if campaign is None:
         return {"error": "not_found"}
     steps = sorted(campaign.get("campaign_steps", []), key=lambda item: item["step_number"])
     for step in steps:
-        await prepare_step_draft(settings, step["id"])
+        await _prepare(settings, step["id"], pool)
     return {"campaign_id": campaign_id, "generation_status": "generating", "total_steps": len(steps)}
 
 
-async def run_campaign_draft_generation_job(settings: Settings, campaign_id: str) -> None:
+async def run_campaign_draft_generation_job(settings: Settings, campaign_id: str, pool=None) -> None:
     try:
-        campaign = await load_campaign(settings, campaign_id)
+        campaign = await _load_campaign(settings, campaign_id, pool)
         if campaign is None:
             return
         for step in sorted(campaign.get("campaign_steps", []), key=lambda item: item["step_number"]):
@@ -134,57 +173,57 @@ async def run_campaign_draft_generation_job(settings: Settings, campaign_id: str
                 relation = relation[0] if relation else None
             draft_id = relation.get("id") if isinstance(relation, dict) else None
             try:
-                await _generate_one_step(settings, campaign, step)
+                await _generate_one_step(settings, campaign, step, pool)
             except Exception as exc:
                 if draft_id:
                     _category, safe_detail = _safe_failure(exc)
                     try:
-                        await set_generation_state(settings, draft_id, "failed", safe_detail)
+                        await _set_state(settings, draft_id, "failed", safe_detail, pool)
                     except Exception:
                         pass
             # Refresh so later messages can use the newly generated preceding step.
-            campaign = await load_campaign(settings, campaign_id) or campaign
+            campaign = await _load_campaign(settings, campaign_id, pool) or campaign
     except Exception:
         # If campaign reload itself fails, close all still-generating step states.
         try:
-            campaign = await load_campaign(settings, campaign_id)
+            campaign = await _load_campaign(settings, campaign_id, pool)
             for step in (campaign or {}).get("campaign_steps", []):
                 relation = step.get("generic_drafts")
                 if isinstance(relation, list):
                     relation = relation[0] if relation else None
                 if isinstance(relation, dict) and relation.get("generation_status") == "generating":
-                    await set_generation_state(settings, relation["id"], "failed",
-                                               "Draft generation could not finish. Check backend/database connectivity, then retry.")
+                    await _set_state(settings, relation["id"], "failed",
+                                     "Draft generation could not finish. Check backend/database connectivity, then retry.", pool)
         except Exception:
             # Leave provider/database internals out of the user-visible state.
             pass
 
 
 async def run_step_generation_job(settings: Settings, campaign_id: str,
-                                  step_id: str, draft_id: str) -> None:
+                                  step_id: str, draft_id: str, pool=None) -> None:
     try:
-        campaign = await load_campaign(settings, campaign_id)
+        campaign = await _load_campaign(settings, campaign_id, pool)
         step = next((item for item in (campaign or {}).get("campaign_steps", [])
                      if item.get("id") == step_id), None)
         if not campaign or not step:
             raise ValueError("Campaign email step was not found.")
-        await _generate_one_step(settings, campaign, step)
+        await _generate_one_step(settings, campaign, step, pool)
     except Exception as exc:
         _category, safe_detail = _safe_failure(exc)
         try:
-            await set_generation_state(settings, draft_id, "failed", safe_detail)
+            await _set_state(settings, draft_id, "failed", safe_detail, pool)
         except Exception:
             pass
 
 
-async def regenerate_draft(settings: Settings, draft_id: str) -> dict | None:
-    draft = await get_draft_context(settings, draft_id)
+async def regenerate_draft(settings: Settings, draft_id: str, pool=None) -> dict | None:
+    draft = await _get_context(settings, draft_id, pool)
     if draft is None:
         return None
     step = draft.get("campaign_steps") or {}
     campaign = (step.get("campaigns") or {})
     # Regeneration includes all earlier step drafts for conversational continuity.
-    whole = await load_campaign(settings, campaign.get("id", step.get("campaign_id", "")))
+    whole = await _load_campaign(settings, campaign.get("id", step.get("campaign_id", "")), pool)
     previous = []
     for earlier in sorted((whole or {}).get("campaign_steps", []), key=lambda item: item["step_number"]):
         if earlier["step_number"] >= step.get("step_number", 0):
@@ -197,22 +236,22 @@ async def regenerate_draft(settings: Settings, draft_id: str) -> dict | None:
     subject, body = await generate_validated_copy(
         _prompt(campaign, step, previous), settings, campaign=campaign, step=step,
         generator=chat_completion_json)
-    saved = await upsert_step_draft(settings, draft["step_id"], subject, body)
+    saved = await _save_draft(settings, draft["step_id"], subject, body, pool)
     if campaign.get("status") == "approved":
-        await demote_campaign(settings, campaign.get("id") or step.get("campaign_id"))
+        await _demote(settings, campaign.get("id") or step.get("campaign_id"), pool)
     return saved
 
 
-async def run_regeneration_job(settings: Settings, draft_id: str) -> None:
+async def run_regeneration_job(settings: Settings, draft_id: str, pool=None) -> None:
     """Run regeneration after returning HTTP 202; persist safe failure state for polling."""
     try:
-        result = await regenerate_draft(settings, draft_id)
+        result = await regenerate_draft(settings, draft_id, pool)
         if result is None:
             return
     except Exception as exc:
         _category, safe_detail = _safe_failure(exc)
         try:
-            await set_generation_state(settings, draft_id, "failed", safe_detail)
+            await _set_state(settings, draft_id, "failed", safe_detail, pool)
         except Exception:
             # Do not leak provider/database details into background-task logs.
             pass

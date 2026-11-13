@@ -8,9 +8,20 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
-    supabase_url: str = ""
-    supabase_anon_key: str = ""
-    supabase_service_key: str = ""
+    database_url: str = ""
+    auth_jwt_secret: str = ""
+    auth_access_token_minutes: int = Field(default=15, ge=5, le=60)
+    auth_refresh_token_days: int = Field(default=30, ge=1, le=90)
+    auth_cookie_secure: bool = True
+    auth_cookie_samesite: Literal["lax", "strict", "none"] = "lax"
+    smtp_host: str = ""
+    smtp_port: int = Field(default=587, ge=1, le=65535)
+    smtp_username: str = ""
+    smtp_password: str = ""
+    smtp_from_email: str = ""
+    smtp_from_name: str = "PocketPerks"
+    smtp_use_tls: bool = True
+    password_reset_origin: str = ""
     claude_api_key: str = ""
     claude_model: str = ""
     outreach_sender_name: str = "The PocketPerks Team"

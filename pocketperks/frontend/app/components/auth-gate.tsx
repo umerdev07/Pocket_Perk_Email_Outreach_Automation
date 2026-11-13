@@ -30,7 +30,7 @@ export default function AuthGate({ children }: { children: React.ReactNode }) {
 
   async function loadWorkspaceUser(_session: AuthSession | null) {
     if (!_session) { setUser(null); return; }
-    const response = await apiFetch(`${(process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000").replace(/\/$/, "")}/api/auth/me`);
+    const response = await apiFetch("/api/auth/me");
     const data = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error("We couldn't verify your workspace access. Please sign in again or contact your workspace admin.");
     setUser(data as WorkspaceUser);

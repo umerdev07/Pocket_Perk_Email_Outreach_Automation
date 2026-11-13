@@ -34,4 +34,4 @@ def test_cors_for_frontend():
 
 def test_missing_database_config():
     import asyncio
-    assert asyncio.run(check_database(Settings(_env_file=None, supabase_url="", supabase_service_key=""))) is False
+    assert asyncio.run(check_database(Settings(_env_file=None, database_url=""))) is False

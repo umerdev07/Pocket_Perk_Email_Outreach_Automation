@@ -23,8 +23,8 @@ def test_permanent_run_failure_is_archived_without_resetting_error_or_progress()
          patch("app.services.campaign_queue_worker.extend_personalization_job", new=AsyncMock()) as extend:
         asyncio.run(_consume_job(settings, _job()))
 
-    process.assert_awaited_once_with(settings, "run-1")
-    archive.assert_awaited_once_with(settings, 42)
+    process.assert_awaited_once_with(settings, "run-1", pool=None)
+    archive.assert_awaited_once_with(settings, 42, pool=None)
     reset.assert_not_awaited()
     extend.assert_not_awaited()
     assert run["error_detail"] == "Background processing stopped (HTTPException)."
@@ -40,6 +40,6 @@ def test_rate_limited_run_is_reset_and_delayed_for_retry():
          patch("app.services.campaign_queue_worker.archive_personalization_job", new=AsyncMock()) as archive:
         asyncio.run(_consume_job(settings, _job()))
 
-    reset.assert_awaited_once_with(settings, "run-1")
-    extend.assert_awaited_once_with(settings, 42, visibility_seconds=300)
+    reset.assert_awaited_once_with(settings, "run-1", pool=None)
+    extend.assert_awaited_once_with(settings, 42, visibility_seconds=300, pool=None)
     archive.assert_not_awaited()

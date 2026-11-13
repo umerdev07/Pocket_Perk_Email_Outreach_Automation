@@ -1,66 +1,44 @@
 """Durable queue for provider webhooks, deduplicated by raw payload digest."""
 from datetime import UTC, datetime
 
-import httpx
 from fastapi import HTTPException
 
 from app.config import Settings
 
 
-def _base(settings: Settings) -> str:
-    if not settings.supabase_url or not settings.supabase_service_key:
-        raise HTTPException(status_code=503, detail="Database is not configured for provider webhooks.")
-    return f"{settings.supabase_url.rstrip('/')}/rest/v1"
+def _required_pool(pool):
+    if pool is None:
+        raise HTTPException(status_code=503, detail="PostgreSQL is unavailable.")
+    return pool
 
 
-def _headers(settings: Settings, prefer: str | None = None) -> dict[str, str]:
-    key = settings.supabase_service_key
-    headers = {"apikey": key, "Authorization": f"Bearer {key}", "Content-Type": "application/json"}
-    if prefer:
-        headers["Prefer"] = prefer
-    return headers
+async def enqueue_instantly_webhook(settings: Settings, event_key: str, payload: dict, pool=None) -> bool:
+    async with _required_pool(pool).acquire() as conn:
+        row = await conn.fetchrow("""insert into public.instantly_webhook_events(event_key,payload)
+            values($1,$2::jsonb) on conflict(event_key) do nothing returning id""", event_key, payload)
+    return row is not None
 
 
-async def enqueue_instantly_webhook(settings: Settings, event_key: str, payload: dict) -> bool:
-    async with httpx.AsyncClient(timeout=15) as client:
-        response = await client.post(f"{_base(settings)}/instantly_webhook_events",
-            params={"on_conflict": "event_key"}, headers=_headers(settings, "resolution=ignore-duplicates,return=representation"),
-            json={"event_key": event_key, "payload": payload})
-    if not response.is_success:
-        raise HTTPException(status_code=503, detail="Webhook could not be safely queued. Retry delivery.")
-    try:
-        rows = response.json()
-    except (ValueError, TypeError) as exc:
-        raise HTTPException(status_code=503, detail="Webhook queue confirmation was invalid.") from exc
-    if not isinstance(rows, list):
-        raise HTTPException(status_code=503, detail="Webhook queue confirmation was invalid.")
-    return bool(rows)
-
-
-async def claim_instantly_webhooks(settings: Settings, limit: int = 10) -> list[dict]:
-    async with httpx.AsyncClient(timeout=20) as client:
-        response = await client.post(f"{_base(settings)}/rpc/claim_instantly_webhook_events",
-            headers=_headers(settings), json={"p_limit": limit})
-    if not response.is_success:
-        raise HTTPException(status_code=503, detail="Could not claim provider webhook events.")
-    rows = response.json()
-    if not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows):
-        raise HTTPException(status_code=503, detail="Provider webhook queue response was invalid.")
-    return rows
+async def claim_instantly_webhooks(settings: Settings, limit: int = 10, pool=None) -> list[dict]:
+    if not 1 <= limit <= 50:
+        raise ValueError("Webhook claim limit must be between 1 and 50.")
+    async with _required_pool(pool).acquire() as conn:
+        rows = await conn.fetch("""with candidates as (
+            select id from public.instantly_webhook_events
+            where status='pending' or (status='processing' and updated_at<now()-interval '10 minutes')
+            order by received_at,id for update skip locked limit $1)
+            update public.instantly_webhook_events e
+            set status='processing',attempts=e.attempts+1,error_detail=null,updated_at=now()
+            from candidates c where e.id=c.id returning e.id,e.event_key,e.payload,e.attempts""", limit)
+    return [dict(row) for row in rows]
 
 
 async def finish_instantly_webhook(settings: Settings, event_id: int, *, error: str | None = None,
-                                   attempts: int = 1) -> None:
-    values = {"status": "processed" if error is None else "pending" if attempts < 10 else "failed",
-              "processed_at": datetime.now(UTC).isoformat() if error is None else None,
-              "error_detail": error[:160] if error else None,
-              "updated_at": datetime.now(UTC).isoformat()}
-    if error is None:
-        # Drop message contents after successful handling; keep only dedupe/audit metadata.
-        values["payload"] = {}
-    async with httpx.AsyncClient(timeout=20) as client:
-        response = await client.patch(f"{_base(settings)}/instantly_webhook_events",
-            params={"id": f"eq.{event_id}", "status": "eq.processing"},
-            headers=_headers(settings, "return=representation"), json=values)
-    if not response.is_success:
-        raise HTTPException(status_code=503, detail="Could not record provider webhook processing state.")
+                                   attempts: int = 1, pool=None) -> None:
+    status = "processed" if error is None else "pending" if attempts < 10 else "failed"
+    processed_at = datetime.now(UTC) if error is None else None
+    error_detail = error[:160] if error else None
+    async with _required_pool(pool).acquire() as conn:
+        await conn.execute("""update public.instantly_webhook_events set status=$2,processed_at=$3,
+            error_detail=$4,payload=case when $2='processed' then '{}'::jsonb else payload end,updated_at=now()
+            where id=$1 and status='processing'""", event_id, status, processed_at, error_detail)

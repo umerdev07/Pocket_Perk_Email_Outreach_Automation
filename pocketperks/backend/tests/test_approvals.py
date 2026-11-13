@@ -22,7 +22,7 @@ def test_approval_queue_lists_pending_review_emails():
         response = client.get("/api/approvals?limit=20")
     assert response.status_code == 200
     assert response.json() == expected
-    assert listing.await_args.kwargs == {"limit": 20, "offset": 0}
+    assert listing.await_args.kwargs == {"limit": 20, "offset": 0, "pool": None}
 
 
 def test_approval_history_returns_saved_automated_and_human_review_events():
@@ -33,7 +33,7 @@ def test_approval_history_returns_saved_automated_and_human_review_events():
         response = client.get("/api/approvals/history?limit=10&offset=5&search=cafe&days=90")
     assert response.status_code == 200
     assert response.json() == expected
-    assert listing.await_args.kwargs == {"limit": 10, "offset": 5, "search": "cafe", "days": 90}
+    assert listing.await_args.kwargs == {"limit": 10, "offset": 5, "search": "cafe", "days": 90, "pool": None}
 
 
 def test_approval_history_rejects_unknown_filter_values():

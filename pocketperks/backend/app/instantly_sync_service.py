@@ -202,21 +202,21 @@ def _aware_datetime(value: Any, label: str) -> datetime:
     return parsed.astimezone(UTC)
 
 
-async def sync_completed_run(settings: Settings, run_id: str) -> dict[str, Any]:
+async def sync_completed_run(settings: Settings, run_id: str, pool=None) -> dict[str, Any]:
     """Create, sync and activate only after sender, data and schedule checks pass.
 
     Lead writes are chunked and their provider IDs are persisted independently.
     If a write response is ambiguous, read the campaign back before considering
     another write; an unavailable read leaves only that bounded chunk unknown.
     """
-    context = await load_sync_run_context(settings, run_id)
+    context = await load_sync_run_context(settings, run_id,pool=pool)
     run, campaign = context["run"], context["campaign"]
     sender_emails = list(dict.fromkeys(email.strip().lower()
                                       for email in run.get("sender_account_emails", [])
                                       if isinstance(email, str) and email.strip()))
     if not sender_emails:
         raise RuntimeError("No sending inbox was selected before this run; no Instantly campaign was created.")
-    mapping = await create_campaign_mapping(settings, run_id, sender_emails)
+    mapping = await create_campaign_mapping(settings, run_id, sender_emails,pool=pool)
     mapped_senders = list(dict.fromkeys(email.strip().lower()
                                         for email in mapping.get("sender_account_emails", [])
                                         if isinstance(email, str) and email.strip()))
@@ -261,7 +261,7 @@ async def sync_completed_run(settings: Settings, run_id: str) -> dict[str, Any]:
                 detail = f"{str(exc)} Reconcile Instantly before retrying."[:240]
             await update_campaign_mapping(settings, mapping["id"], {
                 "status": "failed", "error_detail": detail,
-            })
+            },pool=pool)
             raise
         provider_campaign_id = created["id"]
         provider_status = created.get("status")
@@ -269,11 +269,11 @@ async def sync_completed_run(settings: Settings, run_id: str) -> dict[str, Any]:
             await update_campaign_mapping(settings, mapping["id"], {
                 "instantly_campaign_id": provider_campaign_id, "status": "failed",
                 "error_detail": "Instantly returned a non-draft campaign status; manual review is required.",
-            })
+            },pool=pool)
             raise RuntimeError("Instantly campaign was not confirmed as an inactive draft; lead sync was stopped.")
         await update_campaign_mapping(settings, mapping["id"], {
             "instantly_campaign_id": provider_campaign_id, "status": "draft_created", "error_detail": None,
-        })
+        },pool=pool)
         campaign_was_created = True
 
     counts = {"synced": 0, "skipped": 0, "failed": 0, "unknown": 0}
@@ -283,13 +283,13 @@ async def sync_completed_run(settings: Settings, run_id: str) -> dict[str, Any]:
     step_count = len(automatic_steps)
     while True:
         leads = await load_sync_lead_page(settings, run_id, str(run["batch_id"]),
-                                          offset=offset, limit=page_size)
+                                          offset=offset, limit=page_size,pool=pool)
         if not leads:
             break
         suppressed_emails = await get_suppressed_emails(settings, {
             str(lead.get("email") or "") for lead in leads
-        })
-        states = await get_lead_mapping_statuses(settings, mapping["id"], [str(row["id"]) for row in leads])
+        },pool=pool)
+        states = await get_lead_mapping_statuses(settings, mapping["id"], [str(row["id"]) for row in leads],pool=pool)
         candidates: list[dict] = []
         mapping_rows: list[dict] = []
         held_mapping_rows: list[dict] = []
@@ -339,15 +339,15 @@ async def sync_completed_run(settings: Settings, run_id: str) -> dict[str, Any]:
                                  "error_detail": "Sync in progress; reconcile provider before retrying."})
 
         if suppressed_mapping_rows:
-            await save_lead_mappings(settings, mapping["id"], suppressed_mapping_rows)
+            await save_lead_mappings(settings, mapping["id"], suppressed_mapping_rows,pool=pool)
         if held_mapping_rows:
-            await save_lead_mappings(settings, mapping["id"], held_mapping_rows)
+            await save_lead_mappings(settings, mapping["id"], held_mapping_rows,pool=pool)
         if candidates:
-            await save_lead_mappings(settings, mapping["id"], mapping_rows)
+            await save_lead_mappings(settings, mapping["id"], mapping_rows,pool=pool)
             await update_campaign_mapping(settings, mapping["id"], {
                 "status": "active" if provider_campaign_was_active else "syncing_leads",
                 "error_detail": None,
-            })
+            },pool=pool)
             for batch_start in range(0, len(candidates), provider_batch_size):
                 batch_candidates = candidates[batch_start:batch_start + provider_batch_size]
                 batch_rows = mapping_rows[batch_start:batch_start + provider_batch_size]
@@ -432,7 +432,7 @@ async def sync_completed_run(settings: Settings, run_id: str) -> dict[str, Any]:
                                     "error_detail": "Instantly accepted the batch but skipped this lead during validation or deduplication.",
                                 }
                                 counts["skipped"] += 1
-                await save_lead_mappings(settings, mapping["id"], list(resolved_by_email.values()))
+                await save_lead_mappings(settings, mapping["id"], list(resolved_by_email.values()),pool=pool)
         offset += len(leads)
         if len(leads) < page_size:
             break
@@ -450,7 +450,7 @@ async def sync_completed_run(settings: Settings, run_id: str) -> dict[str, Any]:
         "error_detail": ("Some provider lead outcomes need reconciliation; they will be checked before retry."
                          if unresolved else "Waiting for personalized email review before lead sync."
                          if waiting_for_review else None),
-    })
+    },pool=pool)
     result: dict[str, Any] = {"run_id": run_id, "instantly_campaign_id": provider_campaign_id, **counts}
     if unresolved:
         result["launch"] = "held_for_reconciliation"
@@ -464,7 +464,7 @@ async def sync_completed_run(settings: Settings, run_id: str) -> dict[str, Any]:
     if counts["synced"] < 1:
         await update_campaign_mapping(settings, mapping["id"], {
             "status": "failed", "error_detail": "No eligible leads synced to Instantly.",
-        })
+        },pool=pool)
         result["launch"] = "held_no_eligible_leads"
         return result
     if not settings.instantly_auto_launch or settings.send_mode != "live":
@@ -476,25 +476,25 @@ async def sync_completed_run(settings: Settings, run_id: str) -> dict[str, Any]:
     except ValueError as exc:
         await update_campaign_mapping(settings, mapping["id"], {
             "status": "failed", "error_detail": str(exc)[:240],
-        })
+        },pool=pool)
         result["launch"] = "held_invalid_schedule"
         return result
     now = datetime.now(UTC)
     if end_at <= start_at or end_at <= now:
         await update_campaign_mapping(settings, mapping["id"], {
             "status": "failed", "error_detail": "Campaign sending window has ended or is invalid.",
-        })
+        },pool=pool)
         result["launch"] = "held_invalid_schedule"
         return result
     if start_at > now:
         await update_campaign_mapping(settings, mapping["id"], {
             "status": "scheduled", "sender_account_emails": sender_emails, "error_detail": None,
-        })
+        },pool=pool)
         result["launch"] = "scheduled"
         return result
     await update_campaign_mapping(settings, mapping["id"], {
         "status": "launching", "error_detail": "Selected sender inboxes saved; activation is being confirmed.",
-    })
+    },pool=pool)
     try:
         await activate_campaign(provider_campaign_id, settings)
     except (InstantlyError, InstantlyTimeoutError, InstantlyWriteError) as exc:
@@ -503,9 +503,9 @@ async def sync_completed_run(settings: Settings, run_id: str) -> dict[str, Any]:
             "status": "launching" if unknown else "failed",
             "error_detail": "Instantly activation outcome is unknown; reconcile before retrying."
             if unknown else f"Instantly activation failed: {str(exc)}"[:240],
-        })
+        },pool=pool)
         result["launch"] = "reconciliation_required" if unknown else "failed"
         return result
-    await update_campaign_mapping(settings, mapping["id"], {"status": "active", "error_detail": None})
+    await update_campaign_mapping(settings, mapping["id"], {"status": "active", "error_detail": None},pool=pool)
     result["launch"] = "active"
     return result

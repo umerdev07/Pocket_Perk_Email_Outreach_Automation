@@ -10,8 +10,10 @@ from fastapi import HTTPException as FastAPIHTTPException
 
 from app.config import Settings, get_settings
 from app.db import check_database
+from app.postgres import check_pool, open_pool
 from app.auth import allowed_roles, authenticate_request
 from app.routers.leads import batch_router, router as leads_router
+from app.routers.auth import router as auth_router
 from app.routers.campaigns import router as campaigns_router
 from app.routers.drafts import router as drafts_router
 from app.routers.campaign_runs import router as campaign_runs_router, runs_router
@@ -34,27 +36,37 @@ def create_app(*, auth_enabled: bool = True, queue_worker_enabled: bool = False)
     @asynccontextmanager
     async def lifespan(app: FastAPI):
         worker_tasks = []
-        if queue_worker_enabled and settings.supabase_url and settings.supabase_service_key:
+        app.state.postgres_pool = None
+        if not settings.database_url.strip() and queue_worker_enabled:
+            raise RuntimeError("DATABASE_URL is required. PocketPerks runs on PostgreSQL only.")
+        if settings.database_url.strip():
+            app.state.postgres_pool = await open_pool(settings.database_url)
+        if queue_worker_enabled:
             worker_tasks.append(asyncio.create_task(
-                run_campaign_queue_worker(settings), name="pocketperks-personalization-worker"))
+                run_campaign_queue_worker(settings,app.state.postgres_pool), name="pocketperks-personalization-worker"))
             worker_tasks.append(asyncio.create_task(
-                run_instantly_sync_worker(settings), name="pocketperks-instantly-sync-worker"))
+                run_instantly_sync_worker(settings,app.state.postgres_pool), name="pocketperks-instantly-sync-worker"))
             if settings.instantly_api_key:
                 worker_tasks.append(asyncio.create_task(
-                    run_instantly_replies_worker(settings), name="pocketperks-instantly-replies-worker"))
+                    run_instantly_replies_worker(settings,app.state.postgres_pool), name="pocketperks-instantly-replies-worker"))
                 worker_tasks.append(asyncio.create_task(
-                    run_instantly_lifecycle_worker(settings), name="pocketperks-instantly-lifecycle-worker"))
+                    run_instantly_lifecycle_worker(settings,app.state.postgres_pool), name="pocketperks-instantly-lifecycle-worker"))
             if settings.instantly_webhook_secret:
                 worker_tasks.append(asyncio.create_task(
-                    run_instantly_webhook_worker(settings), name="pocketperks-instantly-webhook-worker"))
+                    run_instantly_webhook_worker(settings,app.state.postgres_pool), name="pocketperks-instantly-webhook-worker"))
         yield
         for worker_task in worker_tasks:
             worker_task.cancel()
         if worker_tasks:
             await asyncio.gather(*worker_tasks, return_exceptions=True)
+        if app.state.postgres_pool is not None:
+            await app.state.postgres_pool.close()
 
     app = FastAPI(title="PocketPerks API", lifespan=lifespan)
     app.state.queue_worker_enabled = queue_worker_enabled
+    app.state.settings = settings
+    app.state.postgres_pool = None
+    app.include_router(auth_router)
     app.include_router(leads_router)
     app.include_router(batch_router)
     app.include_router(campaigns_router)
@@ -72,6 +84,7 @@ def create_app(*, auth_enabled: bool = True, queue_worker_enabled: bool = False)
         allow_origins=[settings.frontend_origin],
         allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
         allow_headers=["Content-Type", "Authorization"],
+        allow_credentials=True,
     )
 
     @app.middleware("http")
@@ -79,6 +92,9 @@ def create_app(*, auth_enabled: bool = True, queue_worker_enabled: bool = False)
         path = request.url.path
         if (not auth_enabled or not path.startswith("/api/") or path == "/api/health"
                 or (path == "/api/webhooks/instantly" and request.method == "POST")
+                or path in {"/api/auth/sign-in", "/api/auth/refresh", "/api/auth/sign-out",
+                            "/api/auth/password-reset", "/api/auth/password-reset/confirm",
+                            "/api/auth/email-change/confirm"}
                 or request.method == "OPTIONS"):
             return await call_next(request)
         try:
@@ -116,7 +132,8 @@ def create_app(*, auth_enabled: bool = True, queue_worker_enabled: bool = False)
 
     @app.get("/api/health")
     async def health(config: Settings = Depends(get_settings)):
-        connected = await check_database(config)
+        pool = getattr(app.state, "postgres_pool", None)
+        connected = (await check_pool(pool)) if pool is not None else await check_database(config)
         payload = {
             "status": "ok" if connected else "degraded",
             "backend": "ok",
@@ -124,7 +141,8 @@ def create_app(*, auth_enabled: bool = True, queue_worker_enabled: bool = False)
             "send_mode": config.send_mode,
         }
         if not connected:
-            payload.update(error="database_unavailable", detail="Check backend Supabase settings and run the initial migration.")
+            detail = "Check the PostgreSQL connection and apply the database migrations."
+            payload.update(error="database_unavailable", detail=detail)
         return JSONResponse(status_code=200 if connected else 503, content=payload)
 
     @app.get("/api/auth/me")
