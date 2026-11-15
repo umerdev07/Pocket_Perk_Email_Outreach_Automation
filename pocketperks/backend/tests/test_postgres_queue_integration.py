@@ -4,16 +4,14 @@ Set POSTGRES_TEST_DATABASE_URL to a disposable database before running this modu
 """
 
 import asyncio
-import json
 import os
 import re
 from unittest.mock import AsyncMock, patch
 from datetime import datetime, timedelta, timezone
 
-import asyncpg
 import pytest
 
-from app.postgres import apply_migrations
+from app.postgres import apply_migrations, open_pool
 from app.postgres_queue import (
     claim_jobs,
     complete_job,
@@ -35,7 +33,7 @@ pytestmark = pytest.mark.skipif(not DATABASE_URL, reason="Requires a disposable 
 def test_queue_claims_are_exclusive_and_retry_is_bounded():
     async def run():
         await apply_migrations(DATABASE_URL)
-        pool = await asyncpg.create_pool(DATABASE_URL, min_size=1, max_size=4)
+        pool = await open_pool(DATABASE_URL)
         try:
             await pool.execute("delete from public.background_jobs where queue_name = 'personalization'")
             ids = [await enqueue_job(pool, "personalization", {"test": n}) for n in range(4)]
@@ -84,7 +82,7 @@ def test_queue_claims_are_exclusive_and_retry_is_bounded():
 def test_campaign_schedule_routines_preserve_create_update_and_step_delete():
     async def run():
         await apply_migrations(DATABASE_URL)
-        pool = await asyncpg.create_pool(DATABASE_URL, min_size=1, max_size=2)
+        pool = await open_pool(DATABASE_URL)
         campaign_id = None
         try:
             starts = datetime.now(timezone.utc) + timedelta(days=1)
@@ -102,27 +100,23 @@ def test_campaign_schedule_routines_preserve_create_update_and_step_delete():
             }
             result = await pool.fetchval(
                 "select public.create_campaign_with_schedule($1::jsonb, $2::jsonb, $3::jsonb)",
-                json.dumps(campaign), json.dumps(["Introduction", "Follow up"]), json.dumps([0, 4320]),
+                campaign, ["Introduction", "Follow up"], [0, 4320],
             )
-            result = json.loads(result) if isinstance(result, str) else result
             campaign_id = result["id"]
             assert len(result["steps"]) == 2
             assert result["steps"][1]["delay_minutes"] == 4320
 
             trigger_result = await pool.fetchval(
                 "select public.set_campaign_step_triggers($1::jsonb)",
-                json.dumps([{"step_id": result["steps"][1]["id"], "trigger_type": "after_conversation"}]),
+                [{"step_id": result["steps"][1]["id"], "trigger_type": "after_conversation"}],
             )
-            trigger_result = json.loads(trigger_result) if isinstance(trigger_result, str) else trigger_result
             assert trigger_result["updated"] == 1
 
             campaign["name"] = "Updated PostgreSQL routine test"
             updated = await pool.fetchval(
                 "select public.update_campaign_with_schedule($1::uuid, $2::jsonb, $3::jsonb, $4::jsonb)",
-                campaign_id, json.dumps(campaign), json.dumps(["New intro", "New follow up"]),
-                json.dumps([0, 4320]),
+                campaign_id, campaign, ["New intro", "New follow up"], [0, 4320],
             )
-            updated = json.loads(updated) if isinstance(updated, str) else updated
             assert updated["updated"] is True
             assert updated["name"] == campaign["name"]
 
@@ -130,7 +124,6 @@ def test_campaign_schedule_routines_preserve_create_update_and_step_delete():
                 "select public.delete_campaign_step($1::uuid, $2::uuid)",
                 campaign_id, updated["steps"][1]["id"],
             )
-            removed = json.loads(removed) if isinstance(removed, str) else removed
             assert removed["deleted"] is True
             assert removed["total_emails"] == 1
         finally:
@@ -146,14 +139,14 @@ def test_campaign_schedule_routines_preserve_create_update_and_step_delete():
 def test_suppression_record_release_and_resuppress_audit():
     async def run():
         await apply_migrations(DATABASE_URL)
-        pool = await asyncpg.create_pool(DATABASE_URL, min_size=1, max_size=2)
+        pool = await open_pool(DATABASE_URL)
         email = "postgres-migration-check@example.test"
         try:
             await pool.execute("delete from public.email_suppression_events where email = $1", email)
             await pool.execute("delete from public.email_suppressions where email = $1", email)
             count = await pool.fetchval(
                 "select public.record_email_suppressions($1::jsonb)",
-                json.dumps([{"email": email, "source": "reply_manual", "reason": "Recipient opted out."}]),
+                [{"email": email, "source": "reply_manual", "reason": "Recipient opted out."}],
             )
             assert count == 1
             released = await pool.fetchrow(
@@ -163,7 +156,7 @@ def test_suppression_record_release_and_resuppress_audit():
             assert released["active"] is False and released["already_released"] is False
             count = await pool.fetchval(
                 "select public.record_email_suppressions($1::jsonb)",
-                json.dumps([{"email": email, "source": "reply_auto", "reason": "Opt-out received again."}]),
+                [{"email": email, "source": "reply_auto", "reason": "Opt-out received again."}],
             )
             assert count == 1
             assert await pool.fetchval("select active from public.email_suppressions where email=$1", email)
@@ -180,7 +173,7 @@ def test_suppression_record_release_and_resuppress_audit():
 def test_postgres_lead_batch_import_reads_and_safe_cleanup():
     async def run():
         await apply_migrations(DATABASE_URL)
-        pool = await asyncpg.create_pool(DATABASE_URL, min_size=1, max_size=2)
+        pool = await open_pool(DATABASE_URL)
         batch_id = None
         try:
             imported = {"status": "imported", "business_name": "Test Cafe", "business_category": "Cafe",
@@ -211,7 +204,7 @@ def test_postgres_lead_batch_import_reads_and_safe_cleanup():
 def test_postgres_campaign_and_draft_repositories_preserve_review_flow():
     async def run():
         await apply_migrations(DATABASE_URL)
-        pool = await asyncpg.create_pool(DATABASE_URL, min_size=1, max_size=2)
+        pool = await open_pool(DATABASE_URL)
         campaign_id = None
         try:
             starts = datetime.now(timezone.utc) + timedelta(days=1)
@@ -271,7 +264,7 @@ def test_postgres_campaign_and_draft_repositories_preserve_review_flow():
 def test_postgres_auth_login_refresh_reset_and_two_address_email_change():
     async def run():
         await apply_migrations(DATABASE_URL)
-        pool = await asyncpg.create_pool(DATABASE_URL, min_size=1, max_size=2)
+        pool = await open_pool(DATABASE_URL)
         email = f"auth-{os.getpid()}@example.test"
         changed_email = f"auth-changed-{os.getpid()}@example.test"
         user_id = None

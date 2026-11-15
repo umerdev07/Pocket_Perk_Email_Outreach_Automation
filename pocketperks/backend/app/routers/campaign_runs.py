@@ -8,6 +8,8 @@ from app.campaign_runs_db import (get_campaign_run, get_campaign_run_instantly_s
 from app.config import Settings, get_settings
 from app.personalization_db import get_run_lead_personalized_emails, get_run_personalized_emails
 from app.instantly_sender_service import assign_senders_and_continue, is_sending_account_ready
+from app.services.instantly_campaign_lifecycle import reconcile_deleted_provider_campaigns
+from app.campaign_control_service import pause_campaigns, resume_campaigns
 from app.integrations.instantly_client import InstantlyError, list_sending_accounts
 from app.services.personalization_service import process_campaign_run
 from app.manual_followup import send_after_conversation
@@ -49,6 +51,13 @@ async def start_campaign(campaign_id: UUID, payload: StartCampaignRequest, reque
     if any(email not in available for email in selected):
         raise HTTPException(status_code=422, detail="Choose only active, connected Instantly sending inboxes.")
     pool = getattr(request.app.state, "postgres_pool", None)
+    if pool is not None and settings.instantly_api_key:
+        prior_run_id = await pool.fetchval("""select r.id from public.campaign_runs r
+            where r.campaign_id=$1::uuid and r.batch_id=$2::uuid
+            order by r.created_at desc limit 1""", str(campaign_id), str(payload.batch_id))
+        if prior_run_id:
+            await reconcile_deleted_provider_campaigns(settings, pool=pool,
+                run_id=str(prior_run_id), force=True)
     result = await start_campaign_run(settings, str(campaign_id), str(payload.batch_id), selected,
                                      sender_accounts=[available[email] for email in selected], pool=pool)
     # The worker-disabled mode is reserved for isolated tests/local embedding.
@@ -73,6 +82,18 @@ async def campaign_run_instantly_status(run_id: UUID, request: Request, settings
     if result is None:
         raise HTTPException(status_code=404, detail="Campaign run not found.")
     return await get_campaign_run_instantly_status(settings, str(run_id), pool=pool)
+
+
+@runs_router.post("/{run_id}/pause")
+async def pause_campaign_run(run_id: UUID, request: Request, settings: Settings = Depends(get_settings)):
+    return await pause_campaigns(settings, getattr(request.app.state, "postgres_pool", None),
+                                 run_id=str(run_id))
+
+
+@runs_router.post("/{run_id}/resume")
+async def resume_campaign_run(run_id: UUID, request: Request, settings: Settings = Depends(get_settings)):
+    return await resume_campaigns(settings, getattr(request.app.state, "postgres_pool", None),
+                                  run_id=str(run_id))
 
 
 @runs_router.post("/{run_id}/senders")

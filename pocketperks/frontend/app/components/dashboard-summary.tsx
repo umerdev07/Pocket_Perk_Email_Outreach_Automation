@@ -90,6 +90,8 @@ export default function DashboardSummary({ apiBase, refreshKey, onNavigate }: Pr
   const [selectedRunDetail, setSelectedRunDetail] = useState<RunDetail | null>(null);
   const [runDetailLoading, setRunDetailLoading] = useState(false);
   const [runDetailError, setRunDetailError] = useState("");
+  const [runControlBusy, setRunControlBusy] = useState(false);
+  const [runControlError, setRunControlError] = useState("");
 
   const loadSummary = useCallback(async () => {
     setLoading(true);
@@ -198,6 +200,28 @@ export default function DashboardSummary({ apiBase, refreshKey, onNavigate }: Pr
     return formatStatus(run.status);
   };
 
+  const controlSelectedRun = async (action: "pause" | "resume") => {
+    if (!selectedRunDetail || runControlBusy) return;
+    setRunControlBusy(true);
+    setRunControlError("");
+    try {
+      const response = await apiFetch(`${apiBase}/api/campaign-runs/${selectedRunDetail.run_id}/${action}`, { method: "POST" });
+      const data = await response.json() as { detail?: string };
+      if (!response.ok) throw new Error(data.detail || `Could not ${action} this campaign.`);
+      setSelectedRunDetail(current => current ? { ...current, sync_status: action === "pause" ? "paused" : "active" } : current);
+      await loadSummary();
+      if (summary?.latest_run?.run_id !== selectedRunDetail.run_id) {
+        const refreshed = await apiFetch(`${apiBase}/api/dashboard/runs/${selectedRunDetail.run_id}`);
+        const detail = await refreshed.json() as RunDetail & { detail?: string };
+        if (refreshed.ok) setSelectedRunDetail(detail);
+      }
+    } catch (cause) {
+      setRunControlError(cause instanceof Error ? cause.message : `Could not ${action} this campaign.`);
+    } finally {
+      setRunControlBusy(false);
+    }
+  };
+
   return (
     <section className="dashboard-summary" aria-labelledby="dashboard-heading">
       <div className="dashboard-heading">
@@ -227,7 +251,8 @@ export default function DashboardSummary({ apiBase, refreshKey, onNavigate }: Pr
           </option>)}
         </select></label></div>
         {runDetailLoading ? <p className="chart-empty">Loading selected campaign activity…</p> : runDetailError ? <p role="alert" className="chart-empty">{runDetailError}</p> : selectedRunDetail && <>
-          <div className="run-history-status"><span className={`badge ${selectedRunDetail.status}`}>{selectedRunDetail.status === "completed" ? "Emails prepared" : formatStatus(selectedRunDetail.status)}</span><span className={`badge ${selectedRunDetail.sync_status === "failed" ? "failed" : selectedRunDetail.sync_status}`}>{runStatusLabel(selectedRunDetail)}</span><small>Run started {new Date(selectedRunDetail.created_at).toLocaleString()}</small></div>
+          <div className="run-history-status"><span className={`badge ${selectedRunDetail.status}`}>{selectedRunDetail.status === "completed" ? "Emails prepared" : formatStatus(selectedRunDetail.status)}</span><span className={`badge ${selectedRunDetail.sync_status === "failed" ? "failed" : selectedRunDetail.sync_status}`}>{runStatusLabel(selectedRunDetail)}</span><small>Run started {new Date(selectedRunDetail.created_at).toLocaleString()}</small>{["active", "scheduled", "launching"].includes(selectedRunDetail.sync_status) && <button type="button" className="secondary-button" disabled={runControlBusy} onClick={() => void controlSelectedRun("pause")}>{runControlBusy ? "Pausing…" : "Pause"}</button>}{selectedRunDetail.sync_status === "paused" && <button type="button" className="secondary-button" disabled={runControlBusy} onClick={() => void controlSelectedRun("resume")}>{runControlBusy ? "Resuming…" : "Resume"}</button>}</div>
+          {runControlError && <p className="latest-run-warning" role="alert">{runControlError}</p>}
           {selectedRunDetail.sync_status === "failed" && selectedRunDetail.sync_error && <p className="latest-run-warning" role="status">{selectedRunDetail.sync_error}</p>}
           <div className="latest-run-metrics">
             <div><small>Leads processed</small><b>{selectedRunDetail.processed} / {selectedRunDetail.total_leads}</b></div>

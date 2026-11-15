@@ -34,11 +34,19 @@ async def start_campaign_run(pool, campaign_id: str, batch_id: str, sender_email
             batch = await conn.fetchrow("select id,imported_count from public.lead_batches where id=$1::uuid for share", batch_id)
             if not batch:
                 raise HTTPException(status_code=404, detail="Lead batch not found.")
-            existing = await conn.fetchval(
-                "select exists(select 1 from public.campaign_runs where campaign_id=$1::uuid and batch_id=$2::uuid)",
-                campaign_id,batch_id)
+            existing = await conn.fetchval("""select exists(
+                select 1 from public.campaign_runs r
+                left join public.instantly_campaign_mappings m on m.run_id=r.id
+                where r.campaign_id=$1::uuid and r.batch_id=$2::uuid
+                  and not (
+                    m.provider_deleted_at is not null
+                    and r.status in ('completed','failed')
+                    and exists(select 1 from public.personalized_emails pe where pe.run_id=r.id)
+                    and not exists(select 1 from public.personalized_emails pe where pe.run_id=r.id
+                      and (pe.send_mode<>'test' or pe.status in ('sent','bounced') or pe.manual_send_state is not null))
+                  ))""", campaign_id,batch_id)
             if existing:
-                raise HTTPException(status_code=409, detail="This campaign has already been started with this lead batch. Use its existing run, or import a new batch to start another run.")
+                raise HTTPException(status_code=409, detail="This campaign already has a run for this lead batch. Reuse that run or import a new batch. A retry is allowed only after Instantly confirms the old campaign was deleted and the prior run was test-only with no sent emails.")
             estimate = _campaign_window_estimate(dict(campaign), int(batch["imported_count"]), sender_accounts) if sender_accounts else None
             if estimate and estimate.get("too_long"):
                 raise HTTPException(status_code=422, detail="This batch would need more than two years at the selected inbox limits. Split the batch or select additional active inboxes before starting.")

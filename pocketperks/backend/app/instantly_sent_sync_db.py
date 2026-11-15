@@ -18,29 +18,40 @@ async def load_queued_campaigns(settings: Settings, pool=None) -> list[dict]:
     async with pool.acquire() as conn:
         mappings = await conn.fetch("""select id,run_id,instantly_campaign_id,status
             from public.instantly_campaign_mappings where status=any($1::text[])
-            and instantly_campaign_id is not null order by created_at limit 1000""", ["leads_synced", "active"])
+            and instantly_campaign_id is not null order by created_at limit 1000""",
+            ["leads_synced", "launching", "scheduled", "active", "paused", "completed", "failed"])
         result = []
         for mapping in mappings:
             emails = await conn.fetch("""select pe.id,pe.run_id,pe.campaign_id,pe.lead_id,pe.step_id,pe.subject,pe.created_at,
-                l.email,s.step_number,lm.instantly_lead_id from public.personalized_emails pe
+                l.email,s.step_number,s.trigger_type,lm.instantly_lead_id from public.personalized_emails pe
                 join public.leads l on l.id=pe.lead_id join public.campaign_steps s on s.id=pe.step_id
                 left join public.instantly_lead_mappings lm on lm.campaign_mapping_id=$1 and lm.lead_id=pe.lead_id and lm.status='synced'
-                where pe.run_id=$2 and pe.status='queued' order by pe.created_at limit 1000""", mapping["id"], mapping["run_id"])
+                where pe.run_id=$2 and pe.status='queued' and s.trigger_type<>'after_conversation'
+                order by s.step_number,pe.created_at limit 1000""", mapping["id"], mapping["run_id"])
             if emails:
                 result.append({**dict(mapping), "id": str(mapping["id"]), "run_id": str(mapping["run_id"]),
                     "queued_emails": [{**dict(e), "id": str(e["id"]), "run_id": str(e["run_id"]),
                         "campaign_id": str(e["campaign_id"]), "lead_id": str(e["lead_id"]),
                         "step_id": str(e["step_id"]), "leads": {"email": e["email"]},
-                        "campaign_steps": {"step_number": e["step_number"]}} for e in emails]})
+                        "instantly_lead_id": e["instantly_lead_id"],
+                        "campaign_steps": {"step_number": e["step_number"], "trigger_type": e["trigger_type"]}}
+                        for e in emails]})
     return result
 
 
 async def mark_email_sent(settings: Settings, email_id: str, provider_email_id: str,
                           sent_at: str, pool=None) -> bool:
+    # asyncpg's timestamptz codec requires a datetime object; passing the ISO
+    # string through a `$n::timestamptz` cast raises DataError on every sync.
+    parsed_sent_at = datetime.fromisoformat(sent_at.replace("Z", "+00:00"))
+    if parsed_sent_at.tzinfo is None:
+        parsed_sent_at = parsed_sent_at.replace(tzinfo=UTC)
     async with _pool_or_fail(pool).acquire() as conn:
         row = await conn.fetchrow("""update public.personalized_emails set status='sent',sent_at=$2::timestamptz,
-            instantly_ref=$3,send_error=null where id=$1::uuid and status='queued' returning id""",
-            email_id, sent_at, provider_email_id)
+            instantly_ref=$3,send_error=null where id=$1::uuid and status='queued'
+            and not exists(select 1 from public.personalized_emails where instantly_ref=$3 and id<>$1::uuid)
+            returning id""",
+            email_id, parsed_sent_at, provider_email_id)
     return row is not None
 
 

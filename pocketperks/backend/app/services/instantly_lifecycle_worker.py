@@ -5,6 +5,7 @@ import time
 
 from app.config import Settings
 from app.services.instantly_campaign_lifecycle import (activate_scheduled_campaigns,
+                                                       reconcile_deleted_provider_campaigns,
                                                        pause_campaigns_past_end_time,
                                                        reconcile_completed_campaigns)
 
@@ -22,6 +23,7 @@ async def run_instantly_lifecycle_worker(settings: Settings, pool=None) -> None:
                 await pause_campaigns_past_end_time(settings,pool=pool)
                 now = time.monotonic()
                 if now - last_status_reconcile >= STATUS_RECONCILE_SECONDS:
+                    await reconcile_deleted_provider_campaigns(settings,pool=pool)
                     await reconcile_completed_campaigns(settings,pool=pool)
                     last_status_reconcile = now
             await asyncio.sleep(POLL_SECONDS)

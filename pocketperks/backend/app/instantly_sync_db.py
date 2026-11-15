@@ -62,6 +62,16 @@ async def load_active_campaign_windows(settings: Settings, *, limit: int = 100, 
     return await fn(_pool_or_fail(pool), limit=limit)
 
 
+async def load_campaigns_for_provider_reconciliation(settings: Settings, *, run_id=None, limit=50, force=False, pool=None) -> list[dict]:
+    from app.instantly_sync_postgres import load_campaigns_for_provider_reconciliation as fn
+    return await fn(_pool_or_fail(pool), run_id=run_id, limit=limit, force=force)
+
+
+async def record_provider_campaign_check(settings: Settings, mapping_id: str, *, deleted=False, pool=None) -> None:
+    from app.instantly_sync_postgres import record_provider_campaign_check as fn
+    await fn(_pool_or_fail(pool), mapping_id, deleted=deleted)
+
+
 async def load_active_runs_with_pending_leads(settings: Settings, *, limit: int = 100, pool=None) -> list[str]:
     from app.instantly_sync_postgres import load_active_runs_with_pending_leads as fn
     return await fn(_pool_or_fail(pool), limit=limit,

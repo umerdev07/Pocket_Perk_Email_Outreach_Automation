@@ -81,7 +81,7 @@ async def load_sync_run_context(pool,run_id):
         run=await conn.fetchrow("select id,campaign_id,batch_id,status,sender_account_emails,schedule_end_at from public.campaign_runs where id=$1::uuid",run_id)
         if not run:raise HTTPException(status_code=404,detail="Campaign run not found.")
         campaign=await conn.fetchrow("""select id,name,total_emails,start_date,end_date,start_at,end_at,timezone,daily_send_start,
-            daily_send_end,sending_days,status from public.campaigns where id=$1::uuid""",run["campaign_id"])
+            daily_send_end,sending_days,daily_email_limit,status from public.campaigns where id=$1::uuid""",run["campaign_id"])
         steps=await conn.fetch("""select s.id,s.step_number,s.delay_days,s.delay_minutes,s.trigger_type,d.id draft_id,d.status draft_status
             from public.campaign_steps s left join public.generic_drafts d on d.step_id=s.id where s.campaign_id=$1::uuid order by s.step_number""",run["campaign_id"])
     if run["status"]!="completed":raise HTTPException(status_code=409,detail="Personalization must finish before Instantly sync.")
@@ -125,20 +125,40 @@ async def load_active_campaign_windows(pool,*,limit=100):
     return [dict(r)|{"id":str(r["id"]),"run_id":str(r["run_id"])} for r in rows]
 
 
+async def load_campaigns_for_provider_reconciliation(pool,*,run_id=None,limit=50,force=False):
+    async with pool.acquire() as conn:
+        rows=await conn.fetch("""select id,run_id,instantly_campaign_id from public.instantly_campaign_mappings
+            where instantly_campaign_id is not null and provider_deleted_at is null
+              and ($2::boolean or provider_checked_at is null or provider_checked_at < now()-interval '5 minutes')
+              and ($1::uuid is null or run_id=$1::uuid)
+            order by provider_checked_at nulls first,updated_at limit $3""",run_id,force,limit)
+    return [dict(r)|{"id":str(r["id"]),"run_id":str(r["run_id"])} for r in rows]
+
+
+async def record_provider_campaign_check(pool,mapping_id,*,deleted=False):
+    async with pool.acquire() as conn:
+        await conn.execute("""update public.instantly_campaign_mappings
+            set provider_checked_at=now(),provider_deleted_at=case when $2 then now() else provider_deleted_at end,
+                updated_at=now() where id=$1::uuid""",mapping_id,deleted)
+
+
 async def load_active_runs_with_pending_leads(pool,*,limit=100,auto_launch=False):
     states=["active","awaiting_review","syncing_leads","failed"]
     if auto_launch:states.append("leads_synced")
     async with pool.acquire() as conn:
         rows=await conn.fetch("""select distinct m.run_id from public.instantly_campaign_mappings m
             where m.status=any($1::text[]) and m.instantly_campaign_id is not null and
-            (m.status in ('syncing_leads','active','awaiting_review','leads_synced') or m.error_detail='No eligible leads synced to Instantly.')
+            (m.status in ('syncing_leads','active','awaiting_review','leads_synced') or
+             m.error_detail in ('No eligible leads synced to Instantly.','Campaign start timestamp is required for automatic launch.'))
             order by m.run_id limit $2""",states,limit)
         # Only recovery rows with pending/unknown leads; the scheduler state is
         # included when live auto-launch is enabled.
         found=[]
         for row in rows:
-            state=await conn.fetchval("select status from public.instantly_campaign_mappings where run_id=$1",row["run_id"])
+            mapping=await conn.fetchrow("select status,error_detail from public.instantly_campaign_mappings where run_id=$1",row["run_id"])
+            state=mapping["status"]
             if state=="leads_synced" and not auto_launch:continue
             pending=await conn.fetchval("select exists(select 1 from public.instantly_lead_mappings lm join public.instantly_campaign_mappings m on m.id=lm.campaign_mapping_id where m.run_id=$1 and lm.status=any(array['pending','unknown']))",row["run_id"])
-            if pending or state=="leads_synced":found.append(str(row["run_id"]))
+            recoverable_launch_error=(state=="failed" and mapping["error_detail"]=="Campaign start timestamp is required for automatic launch.")
+            if pending or state=="leads_synced" or recoverable_launch_error:found.append(str(row["run_id"]))
     return found

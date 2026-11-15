@@ -4,11 +4,36 @@ import logging
 from datetime import UTC, datetime
 
 from app.config import Settings
+from app.campaign_control_lock import campaign_control_lock
 from app.instantly_sync_db import (load_active_campaign_windows, load_scheduled_campaign_windows,
-                                   update_campaign_mapping)
+                                   load_campaigns_for_provider_reconciliation,
+                                   record_provider_campaign_check, update_campaign_mapping)
 from app.integrations.instantly_client import activate_campaign, get_campaign, pause_campaign
 
 logger = logging.getLogger(__name__)
+
+
+async def reconcile_deleted_provider_campaigns(settings: Settings, pool=None, *, run_id=None, force=False, limit=50) -> int:
+    """Mark provider campaigns deleted in Instantly without discarding local run history."""
+    if not settings.instantly_api_key:
+        return 0
+    mappings = await load_campaigns_for_provider_reconciliation(settings, run_id=run_id, limit=limit, force=force, pool=pool)
+    semaphore = asyncio.Semaphore(5)
+
+    async def check(mapping: dict) -> int:
+        async with semaphore:
+            try:
+                provider = await get_campaign(str(mapping["instantly_campaign_id"]), settings)
+                await record_provider_campaign_check(settings, mapping["id"], deleted=provider is None, pool=pool)
+                if provider is None:
+                    logger.info("Instantly campaign deletion confirmed (mapping_id=%s).", mapping["id"])
+                    return 1
+            except Exception as exc:
+                logger.warning("Could not reconcile Instantly campaign (mapping_id=%s, error=%s).",
+                               mapping.get("id"), type(exc).__name__)
+        return 0
+
+    return sum(await asyncio.gather(*(check(mapping) for mapping in mappings)))
 
 
 async def reconcile_completed_campaigns(settings: Settings, pool=None) -> int:
@@ -80,38 +105,50 @@ async def activate_scheduled_campaigns(settings: Settings, pool=None) -> int:
     mappings = await load_scheduled_campaign_windows(settings,pool=pool)
     activated = 0
     for mapping in mappings:
-        try:
-            start_at = datetime.fromisoformat(str(mapping["start_at"]).replace("Z", "+00:00"))
-            end_at = datetime.fromisoformat(str(mapping["end_at"]).replace("Z", "+00:00"))
-            if start_at.tzinfo is None or end_at.tzinfo is None:
-                raise ValueError("missing timezone")
-        except (KeyError, TypeError, ValueError):
-            logger.error("Scheduled Instantly campaign has invalid timestamps (mapping_id=%s).", mapping.get("id"))
-            continue
-        if not mapping.get("sender_account_emails"):
-            continue
-        if end_at.astimezone(UTC) <= now:
-            await update_campaign_mapping(settings, str(mapping["id"]), {
-                "status": "failed", "error_detail": "Campaign window ended before its scheduled activation.",
-            },pool=pool)
-            continue
-        if start_at.astimezone(UTC) > now:
-            continue
-        await update_campaign_mapping(settings, str(mapping["id"]), {
-            "status": "launching", "error_detail": "Scheduled activation submitted; confirmation is pending.",
-        },pool=pool)
-        try:
-            await activate_campaign(str(mapping["instantly_campaign_id"]), settings)
-            await update_campaign_mapping(settings, str(mapping["id"]), {
-                "status": "active", "error_detail": None,
-            },pool=pool)
-            activated += 1
-        except Exception as exc:
-            # Unknown outcomes remain launching so the worker never blindly repeats activation.
-            if not getattr(exc, "outcome_unknown", False):
-                await update_campaign_mapping(settings, str(mapping["id"]), {
-                    "status": "failed", "error_detail": f"Scheduled Instantly activation failed: {type(exc).__name__}",
-                },pool=pool)
-            logger.error("Could not activate scheduled Instantly campaign (mapping_id=%s, error=%s).",
-                         mapping.get("id"), type(exc).__name__)
+        # The user pause/resume API uses the same lock. Re-read state only after
+        # acquiring it so a campaign paused at its start time cannot be launched
+        # from a stale scheduler snapshot.
+        async with campaign_control_lock(pool, str(mapping["id"])) as conn:
+            current = await conn.fetchrow("""select m.status,m.instantly_campaign_id,m.sender_account_emails,
+                    c.start_at,coalesce(r.schedule_end_at,c.end_at) end_at
+                from public.instantly_campaign_mappings m
+                join public.campaign_runs r on r.id=m.run_id
+                join public.campaigns c on c.id=r.campaign_id
+                where m.id=$1::uuid""", str(mapping["id"]))
+            if not current or current["status"] != "scheduled":
+                continue
+            try:
+                start_at = current["start_at"]
+                end_at = current["end_at"]
+                if start_at.tzinfo is None or end_at.tzinfo is None:
+                    raise ValueError("missing timezone")
+            except (AttributeError, TypeError, ValueError):
+                logger.error("Scheduled Instantly campaign has invalid timestamps (mapping_id=%s).", mapping.get("id"))
+                continue
+            if not current["sender_account_emails"]:
+                continue
+            if end_at.astimezone(UTC) <= now:
+                await conn.execute("""update public.instantly_campaign_mappings
+                    set status='failed',error_detail='Campaign window ended before its scheduled activation.',updated_at=now()
+                    where id=$1::uuid""", str(mapping["id"]))
+                continue
+            if start_at.astimezone(UTC) > now:
+                continue
+            await conn.execute("""update public.instantly_campaign_mappings
+                set status='launching',error_detail='Scheduled activation submitted; confirmation is pending.',updated_at=now()
+                where id=$1::uuid""", str(mapping["id"]))
+            try:
+                await activate_campaign(str(current["instantly_campaign_id"]), settings)
+                await conn.execute("""update public.instantly_campaign_mappings
+                    set status='active',error_detail=null,updated_at=now() where id=$1::uuid""",
+                    str(mapping["id"]))
+                activated += 1
+            except Exception as exc:
+                # Unknown outcomes remain launching so the worker never blindly repeats activation.
+                if not getattr(exc, "outcome_unknown", False):
+                    await conn.execute("""update public.instantly_campaign_mappings
+                        set status='failed',error_detail=$2,updated_at=now() where id=$1::uuid""",
+                        str(mapping["id"]), f"Scheduled Instantly activation failed: {type(exc).__name__}")
+                logger.error("Could not activate Instantly campaign (mapping_id=%s, error=%s).",
+                             mapping.get("id"), type(exc).__name__)
     return activated

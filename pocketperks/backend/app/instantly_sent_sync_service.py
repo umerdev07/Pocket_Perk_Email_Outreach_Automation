@@ -26,6 +26,20 @@ def _normalized_subject(value: object) -> str:
     return re.sub(r"^(?:(?:re|fw|fwd):\s*)+", "", subject)
 
 
+def _provider_recipient(item: dict) -> str:
+    """Read the lead address across the fields returned by Instantly's email API."""
+    for field in ("lead", "to_address_email_list"):
+        value = item.get(field)
+        if isinstance(value, str) and value.strip():
+            # The documented `lead` field is a single address. The recipient list
+            # may contain several comma-separated addresses; use an exact address
+            # only when it resolves to one recipient.
+            addresses = re.findall(r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}", value, re.IGNORECASE)
+            if len(addresses) == 1:
+                return addresses[0].casefold()
+    return ""
+
+
 async def sync_sent_email_statuses(settings: Settings, *, campaign_offset: int = 0, pool=None) -> dict[str, int]:
     """Mark rows sent only after matching a sent campaign email from Instantly.
 
@@ -44,6 +58,9 @@ async def sync_sent_email_statuses(settings: Settings, *, campaign_offset: int =
         ordered_campaigns = campaigns[start:] + campaigns[:start]
         selected = ordered_campaigns[:MAX_CAMPAIGNS_PER_CYCLE]
         marked = 0
+        provider_sends_seen = 0
+        unmatched_sends = 0
+        seen_provider_ids: set[str] = set()
         for campaign in selected:
             queued = campaign["queued_emails"]
             earliest = min((row.get("created_at") for row in queued if isinstance(row.get("created_at"), str)), default=None)
@@ -81,20 +98,39 @@ async def sync_sent_email_statuses(settings: Settings, *, campaign_offset: int =
             for item in sent_items:
                 if str(item.get("campaign_id") or "") != str(campaign["instantly_campaign_id"]):
                     continue
-                address = str(item.get("lead") or "").strip().casefold()
+                # Instantly distinguishes sequence sends (ue_type=1) from
+                # manually sent messages (ue_type=3). Manual replies must never
+                # consume a queued campaign step.
+                if item.get("ue_type") not in (1, "1"):
+                    continue
+                # When the API identifies a message as a campaign email, count it
+                # for diagnostics even when local reconciliation cannot match it.
+                provider_sends_seen += 1
+                provider_id = item.get("id")
+                if not isinstance(provider_id, str) or not provider_id.strip() or provider_id in seen_provider_ids:
+                    continue
+                seen_provider_ids.add(provider_id)
+                address = _provider_recipient(item)
                 provider_lead_id = str(item.get("lead_id") or "")
                 candidates = queued_by_provider_lead.get(provider_lead_id) or queued_by_recipient.get(address, [])
                 if not candidates:
+                    unmatched_sends += 1
                     continue
                 subject = _normalized_subject(item.get("subject"))
                 match = next((row for row in candidates if _normalized_subject(row.get("subject")) == subject), None)
                 if not match:
-                    continue
-                provider_id = item.get("id")
-                if not isinstance(provider_id, str) or not provider_id.strip():
+                    unmatched_sends += 1
                     continue
                 if await mark_email_sent(settings, str(match["id"]), provider_id, provider_sent_timestamp(item),pool=pool):
                     marked += 1
-                    candidates.remove(match)
+                    # These indexes reference the same row objects. Remove the
+                    # matched step from both so duplicate provider records cannot
+                    # reuse it through the recipient fallback index.
+                    for indexed_rows in (queued_by_provider_lead.get(provider_lead_id), queued_by_recipient.get(address)):
+                        if indexed_rows and match in indexed_rows:
+                            indexed_rows.remove(match)
+                else:
+                    unmatched_sends += 1
 
-        return {"campaigns_scanned": len(selected), "campaigns_available": len(campaigns), "marked_sent": marked}
+        return {"campaigns_scanned": len(selected), "campaigns_available": len(campaigns), "marked_sent": marked,
+                "provider_sends_seen": provider_sends_seen, "unmatched_sends": unmatched_sends}

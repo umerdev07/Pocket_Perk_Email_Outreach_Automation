@@ -21,6 +21,9 @@ async def run_instantly_replies_worker(settings: Settings, pool=None) -> None:
                         campaign_offset = (campaign_offset + sent["campaigns_scanned"]) % sent["campaigns_available"]
                     if sent["marked_sent"]:
                         logger.info("Reconciled %s confirmed Instantly sends into PocketPerks.", sent["marked_sent"])
+                    if sent.get("unmatched_sends"):
+                        logger.warning("Instantly sent-email sync saw %s provider record(s) and could not reconcile %s.",
+                                       sent.get("provider_sends_seen", 0), sent["unmatched_sends"])
                 except Exception as exc:
                     logger.warning("Instantly sent-email status sync will retry after %s.", type(exc).__name__)
                 result = await sync_recent_replies(settings, max_pages=1,pool=pool)

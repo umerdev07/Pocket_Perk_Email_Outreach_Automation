@@ -99,13 +99,32 @@ async def get_lead_batch_report(batch_id: UUID, limit: int = Query(default=10, g
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
+_SHARED_HOSTING_DOMAINS = {
+    "facebook.com", "instagram.com", "linkedin.com", "tiktok.com", "twitter.com",
+    "x.com", "youtube.com", "youtu.be", "threads.net", "pinterest.com", "linktr.ee",
+}
+
+
 def _domain(website: str) -> str | None:
     website = website.strip()
     if not website:
         return None
     parsed = urlparse(website if "://" in website else f"//{website}")
     host = parsed.hostname
-    return host.lower().removeprefix("www.") if host else None
+    if not host:
+        return None
+    normalized = host.lower().removeprefix("www.").rstrip(".")
+    # Shared profile hosts are not business domains. Store no dedupe-domain for
+    # them, since PostgreSQL also has a unique index on non-null lead domains.
+    return None if _is_shared_hosting_domain(normalized) else normalized
+
+
+def _is_shared_hosting_domain(domain: str | None) -> bool:
+    """Social profile URLs are not unique business domains for deduplication."""
+    if not domain:
+        return False
+    host = domain.lower().removeprefix("www.").rstrip(".")
+    return any(host == shared or host.endswith(f".{shared}") for shared in _SHARED_HOSTING_DOMAINS)
 
 
 def _parse_csv(content: bytes) -> tuple[list[str] | None, list[list[object]]]:
@@ -210,7 +229,7 @@ async def import_leads(file: UploadFile = File(...), request: Request = None):
     if pool is None:
         raise HTTPException(status_code=503, detail="Lead storage is temporarily unavailable.")
     emails = {r["email"] for r in valid_candidates}
-    domains = {r["domain"] for r in valid_candidates if r["domain"]}
+    domains = {r["domain"] for r in valid_candidates if r["domain"] and not _is_shared_hosting_domain(r["domain"])}
     db_emails, db_domains = await leads_postgres.existing_values(pool, emails, domains)
     seen_emails, seen_domains = set(db_emails), set(db_domains)
     suppressed_emails = await leads_postgres.suppressed_emails(pool, emails)
@@ -225,12 +244,12 @@ async def import_leads(file: UploadFile = File(...), request: Request = None):
             status = "rejected"
             row["rejection_reason"] = "This address previously opted out and is suppressed."
             counts["suppressed"] += 1
-        elif row["email"] in seen_emails or (row["domain"] and row["domain"] in seen_domains):
+        elif row["email"] in seen_emails or (row["domain"] and not _is_shared_hosting_domain(row["domain"]) and row["domain"] in seen_domains):
             status = "duplicate"
         else:
             status = "imported"
             seen_emails.add(row["email"])
-            if row["domain"]:
+            if row["domain"] and not _is_shared_hosting_domain(row["domain"]):
                 seen_domains.add(row["domain"])
         counts[status] += 1
         row["status"] = status

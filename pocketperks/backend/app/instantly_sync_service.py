@@ -132,6 +132,7 @@ def build_campaign_payload(campaign: dict[str, Any], steps: list[dict[str, Any]]
 
     return {
         "name": str(campaign["name"]).strip(),
+        "daily_limit": int(campaign.get("daily_email_limit") or 100),
         **({"email_list": list(dict.fromkeys(email.strip().lower() for email in sender_emails
                                                if isinstance(email, str) and email.strip()))}
            if sender_emails else {}),
@@ -191,12 +192,15 @@ def build_lead_payload(lead: dict[str, Any], personalized_steps: list[dict[str, 
 
 
 def _aware_datetime(value: Any, label: str) -> datetime:
-    if not isinstance(value, str) or not value.strip():
+    if isinstance(value, datetime):
+        parsed = value
+    elif isinstance(value, str) and value.strip():
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError as exc:
+            raise ValueError(f"Campaign {label} timestamp is invalid.") from exc
+    else:
         raise ValueError(f"Campaign {label} timestamp is required for automatic launch.")
-    try:
-        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
-    except ValueError as exc:
-        raise ValueError(f"Campaign {label} timestamp is invalid.") from exc
     if parsed.tzinfo is None:
         raise ValueError(f"Campaign {label} timestamp must include a timezone.")
     return parsed.astimezone(UTC)
@@ -239,6 +243,7 @@ async def sync_completed_run(settings: Settings, run_id: str, pool=None) -> dict
             "Some provider lead outcomes need reconciliation; those leads will not be resent.",
             "Some provider lead outcomes need reconciliation; they will be checked before retry.",
             "No eligible leads synced to Instantly.",
+            "Campaign start timestamp is required for automatic launch.",
         }
     )
     if mapping.get("status") == "failed" and not retryable_sync_failure:
@@ -373,7 +378,7 @@ async def sync_completed_run(settings: Settings, run_id: str, pool=None) -> dict
                         resolved_by_email[email] = {
                             "lead_id": row["lead_id"], "status": "synced",
                             "instantly_lead_id": provider_id,
-                            "synced_at": datetime.now(UTC).isoformat(), "error_detail": None,
+                            "synced_at": datetime.now(UTC), "error_detail": None,
                         }
                         counts["synced"] += 1
                     else:
@@ -397,7 +402,7 @@ async def sync_completed_run(settings: Settings, run_id: str, pool=None) -> dict
                                 resolved_by_email[email] = {
                                     "lead_id": row["lead_id"], "status": "synced",
                                     "instantly_lead_id": provider_id,
-                                    "synced_at": datetime.now(UTC).isoformat(), "error_detail": None,
+                                    "synced_at": datetime.now(UTC), "error_detail": None,
                                 }
                                 counts["synced"] += 1
                             elif getattr(exc, "outcome_unknown", False):
@@ -422,7 +427,7 @@ async def sync_completed_run(settings: Settings, run_id: str, pool=None) -> dict
                                 resolved_by_email[email] = {
                                     "lead_id": row["lead_id"], "status": "synced",
                                     "instantly_lead_id": provider_id,
-                                    "synced_at": datetime.now(UTC).isoformat(), "error_detail": None,
+                                    "synced_at": datetime.now(UTC), "error_detail": None,
                                 }
                                 counts["synced"] += 1
                             else:

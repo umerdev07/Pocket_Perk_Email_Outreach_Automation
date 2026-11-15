@@ -1,10 +1,12 @@
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field, model_validator
 from datetime import UTC, date, datetime, time
 from zoneinfo import ZoneInfo
 from uuid import UUID
 
 from app import campaigns_postgres
+from app.config import Settings, get_settings
+from app.campaign_control_service import pause_campaigns, resume_campaigns
 
 router = APIRouter(prefix="/api/campaigns", tags=["campaigns"])
 
@@ -12,6 +14,7 @@ router = APIRouter(prefix="/api/campaigns", tags=["campaigns"])
 class CampaignCreate(BaseModel):
     name: str = Field(min_length=1)
     total_emails: int = Field(ge=1, le=10)
+    daily_email_limit: int = Field(default=100, ge=1, le=10000)
     instructions: str = Field(min_length=1)
     start_at: datetime | None = None
     end_at: datetime | None = None
@@ -126,6 +129,20 @@ async def get_campaign_endpoint(campaign_id: str, request: Request):
     if result is None:
         raise HTTPException(status_code=404, detail="Campaign not found.")
     return result
+
+
+@router.post("/{campaign_id}/pause")
+async def pause_campaign_endpoint(campaign_id: UUID, request: Request,
+                                  settings: Settings = Depends(get_settings)):
+    return await pause_campaigns(settings, getattr(request.app.state, "postgres_pool", None),
+                                 campaign_id=str(campaign_id))
+
+
+@router.post("/{campaign_id}/resume")
+async def resume_campaign_endpoint(campaign_id: UUID, request: Request,
+                                   settings: Settings = Depends(get_settings)):
+    return await resume_campaigns(settings, getattr(request.app.state, "postgres_pool", None),
+                                  campaign_id=str(campaign_id))
 
 
 @router.delete("/{campaign_id}/steps/{step_id}")
