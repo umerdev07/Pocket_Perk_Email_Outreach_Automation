@@ -11,6 +11,7 @@ from app.instantly_sender_service import assign_senders_and_continue, is_sending
 from app.services.instantly_campaign_lifecycle import reconcile_deleted_provider_campaigns
 from app.campaign_control_service import pause_campaigns, resume_campaigns
 from app.integrations.instantly_client import InstantlyError, list_sending_accounts
+from app.instantly_capacity import get_workspace_capacity
 from app.services.personalization_service import process_campaign_run
 from app.manual_followup import send_after_conversation
 
@@ -50,6 +51,7 @@ async def start_campaign(campaign_id: UUID, payload: StartCampaignRequest, reque
                  for account in accounts if is_sending_account_ready(account)}
     if any(email not in available for email in selected):
         raise HTTPException(status_code=422, detail="Choose only active, connected Instantly sending inboxes.")
+    workspace_capacity = get_workspace_capacity(settings, accounts)
     pool = getattr(request.app.state, "postgres_pool", None)
     if pool is not None and settings.instantly_api_key:
         prior_run_id = await pool.fetchval("""select r.id from public.campaign_runs r
@@ -59,7 +61,8 @@ async def start_campaign(campaign_id: UUID, payload: StartCampaignRequest, reque
             await reconcile_deleted_provider_campaigns(settings, pool=pool,
                 run_id=str(prior_run_id), force=True)
     result = await start_campaign_run(settings, str(campaign_id), str(payload.batch_id), selected,
-                                     sender_accounts=[available[email] for email in selected], pool=pool)
+                                     sender_accounts=[available[email] for email in selected], pool=pool,
+                                     daily_capacity=workspace_capacity["daily_email_capacity"])
     # The worker-disabled mode is reserved for isolated tests/local embedding.
     if not request.app.state.queue_worker_enabled:
         background_tasks.add_task(process_campaign_run, settings, result["run_id"], pool)

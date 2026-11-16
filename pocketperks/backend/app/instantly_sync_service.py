@@ -9,6 +9,7 @@ from typing import Any
 from fastapi import HTTPException
 
 from app.config import Settings, get_settings
+from app.instantly_capacity import fetch_workspace_capacity
 from app.lead_eligibility import lead_eligibility_reason
 from app.instantly_sync_db import (create_campaign_mapping, get_lead_mapping_statuses,
                                    get_campaign_mapping_for_run, claim_capacity_reservation,
@@ -224,7 +225,8 @@ async def sync_completed_run(settings: Settings, run_id: str, pool=None) -> dict
         raise RuntimeError("No sending inbox was selected before this run; no Instantly campaign was created.")
     existing_mapping=await get_campaign_mapping_for_run(settings,run_id,pool=pool)
     if not existing_mapping or existing_mapping.get("status")!="completed":
-        admitted=await claim_capacity_reservation(settings,run_id,settings.outreach_daily_email_capacity,pool=pool)
+        workspace_capacity=await fetch_workspace_capacity(settings)
+        admitted=await claim_capacity_reservation(settings,run_id,workspace_capacity["daily_email_capacity"],pool=pool)
         if not admitted:
             raise HTTPException(status_code=409,detail="Waiting for shared daily sending capacity. This campaign will continue automatically when capacity is available.")
     mapping = await create_campaign_mapping(settings, run_id, sender_emails,pool=pool)

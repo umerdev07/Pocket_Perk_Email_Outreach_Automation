@@ -37,7 +37,8 @@ async def get_campaign_mapping_for_run(pool,run_id):
 async def load_active_sender_usage(pool):
     async with pool.acquire() as conn:
         rows=await conn.fetch("""select r.id run_id,m.status,campaigns.name campaign_name,
-                    reservations.requested_daily_emails,campaigns.start_at,reservations.window_end end_at,
+                    reservations.requested_daily_emails,campaigns.daily_email_limit campaign_daily_cap,
+                    campaigns.timezone,campaigns.start_at,reservations.window_end end_at,
                     reservations.state,r.sender_account_emails
                from public.campaign_capacity_reservations reservations
                join public.campaign_runs r on r.id=reservations.run_id
@@ -49,6 +50,7 @@ async def load_active_sender_usage(pool):
         reserved=int(r["requested_daily_emails"] or 0) if r["state"]=="reserved" else 0
         item={"run_id":str(r["run_id"]),"status":r["status"],"campaign_name":r["campaign_name"],
               "reserved_daily_emails":reserved,"requested_daily_emails":int(r["requested_daily_emails"] or 0),
+              "campaign_daily_cap":int(r["campaign_daily_cap"] or 0),"timezone":r["timezone"],
               "capacity_state":r["state"],"start_at":r["start_at"],"end_at":r["end_at"]}
         for sender in r["sender_account_emails"] or []:by.setdefault(sender.strip().lower(),[]).append(item)
     return {"active_campaign_count":sum(1 for r in rows if r["state"]=="reserved"),"reserved_daily_emails":sum(

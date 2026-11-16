@@ -43,9 +43,24 @@ type Summary = {
   instantly_completed_campaigns: number;
   instantly_auto_launch_enabled: boolean;
   daily_email_capacity: number;
+  provider_daily_email_capacity?: number;
+  capacity_sync_available?: boolean;
+  eligible_inbox_count?: number;
+  capacity_source?: string;
   reserved_daily_emails: number;
   remaining_daily_emails: number;
   queued_capacity_runs: number;
+  upcoming_estimated_daily_emails: number;
+  upcoming_campaign_daily_caps: number;
+  upcoming_capacity_runs: {
+    campaign_name: string;
+    start_at: string;
+    timezone: string;
+    capacity_state: "reserved" | "queued";
+    provider_status: string;
+    estimated_daily_emails: number;
+    campaign_daily_cap: number;
+  }[];
   recent_completed_campaigns: { campaign_name: string; completed_at: string }[];
   latest_run: RunDetail | null;
   recent_runs: { run_id: string; campaign_name: string; status: string; sync_status: string;
@@ -159,7 +174,8 @@ export default function DashboardSummary({ apiBase, refreshKey, onNavigate }: Pr
     { label: "Bounce events", value: summary.bounce_activity?.total || 0, hint: summary.bounce_activity?.available === false ? "Details unavailable" : `${summary.bounce_activity?.hard || 0} hard · ${summary.bounce_activity?.soft || 0} temporary · ${summary.bounce_activity?.unknown || 0} need review`, tone: "amber" },
     { label: "Emails being prepared", value: summary.active_runs, hint: "Currently processing", tone: "blue" },
     { label: "Active sending campaigns", value: summary.instantly_active_campaigns, hint: `${summary.instantly_completed_campaigns} completed · ${Math.max(0, summary.instantly_campaigns - summary.instantly_active_campaigns - summary.instantly_completed_campaigns)} other provider records may be drafts, scheduled, paused or need attention${summary.instantly_auto_launch_enabled ? " · automatic start on" : " · automatic start is off"}`, tone: "violet" },
-    { label: "Shared sending capacity", value: `${summary.remaining_daily_emails} / ${summary.daily_email_capacity}`, hint: `emails/day remaining · ${summary.reserved_daily_emails} reserved by active campaigns`, tone: "blue" },
+    { label: "Shared daily sending limit", value: summary.capacity_sync_available === false ? "Unavailable" : `${summary.daily_email_capacity}/day`, hint: summary.capacity_sync_available === false ? "Could not refresh Instantly inbox limits. Try Refresh again." : `From ${summary.eligible_inbox_count ?? "connected"} active inboxes · ${summary.reserved_daily_emails} reserved · ${summary.remaining_daily_emails} available.`, tone: "blue" },
+    { label: "Upcoming campaign plans", value: summary.upcoming_capacity_runs.length, hint: summary.upcoming_capacity_runs.length ? `Estimated ${summary.upcoming_estimated_daily_emails}/day · campaign caps total ${summary.upcoming_campaign_daily_caps}/day` : "No future campaigns in the capacity queue", tone: "violet" },
     { label: "Waiting for sending capacity", value: summary.queued_capacity_runs, hint: "Campaigns will sync automatically as capacity opens", tone: "amber" },
     { label: "Leads added to campaigns", value: summary.instantly_leads_synced, hint: "Ready for scheduled sending", tone: "green" },
     { label: "Lead replies", value: summary.total_replies, hint: `${summary.unread_replies} unread in PocketPerks`, tone: "amber" },
@@ -246,6 +262,31 @@ export default function DashboardSummary({ apiBase, refreshKey, onNavigate }: Pr
           </article>
         ))}
       </div>
+      {!!summary?.upcoming_capacity_runs.length && <article className="dashboard-chart-card upcoming-capacity-card">
+        <div className="dashboard-chart-heading"><div>
+          <h3>Upcoming campaign capacity</h3>
+          <p>Today's available limit is separate from these future campaign plans.</p>
+        </div></div>
+        <div className="capacity-plan-list">
+          {summary.upcoming_capacity_runs.map((plan, index) => {
+            const planStatus = plan.capacity_state === "queued" ? "Waiting for capacity"
+              : plan.provider_status === "draft_created" ? "Reserved · Instantly draft"
+              : plan.provider_status === "scheduled" ? "Reserved · scheduled"
+              : plan.provider_status === "active" ? "Active"
+              : `Reserved · ${plan.provider_status.replace(/_/g, " ")}`;
+            const startsAt = new Intl.DateTimeFormat("en-GB", {
+              timeZone: plan.timezone || "Asia/Karachi", day: "numeric", month: "short",
+              hour: "numeric", minute: "2-digit",
+            }).format(new Date(plan.start_at));
+            return <div className="capacity-plan-row" key={`${plan.campaign_name}-${plan.start_at}-${index}`}>
+              <div className="capacity-plan-name"><b>{plan.campaign_name}</b><small>Starts {startsAt} · {plan.timezone}</small></div>
+              <div className="capacity-plan-detail"><span className={plan.capacity_state === "queued" ? "capacity-plan-status queued" : "capacity-plan-status"}>{planStatus}</span>
+                <small>Estimated {plan.estimated_daily_emails}/day · campaign cap {plan.campaign_daily_cap}/day</small></div>
+            </div>;
+          })}
+        </div>
+        <small className="latest-run-note">The cap is a maximum; the estimate reflects this run's lead batch and automatic email steps.</small>
+      </article>}
       {summary?.recent_runs?.length ? <article className="dashboard-chart-card latest-run-card">
         <div className="dashboard-chart-heading"><div>
           <h3>Latest campaign activity</h3>

@@ -94,12 +94,18 @@ async def get_dashboard_summary(pool, settings, *, activity_days: int=14) -> dic
     if latest_row: latest=await get_dashboard_run_detail(pool,str(latest_row["id"]))
     capacity=await load_active_sender_usage(pool)
     now=datetime.now(UTC)
-    active_capacity_runs={item["run_id"]:item for campaigns in capacity["by_sender"].values()
-        for item in campaigns if item.get("run_id")
+    capacity_runs={item["run_id"]:item for campaigns in capacity["by_sender"].values()
+        for item in campaigns if item.get("run_id")}
+    active_capacity_runs={run_id:item for run_id,item in capacity_runs.items()
+        if item.get("capacity_state")=="reserved"
         and (item.get("start_at") is None or item["start_at"]<=now)
         and (item.get("end_at") is None or item["end_at"]>=now)}
     reserved_capacity=sum(int(item.get("reserved_daily_emails") or 0)
         for item in active_capacity_runs.values())
+    upcoming_capacity_runs=sorted((item for item in capacity_runs.values()
+        if item.get("start_at") is not None and item["start_at"]>now
+        and (item.get("end_at") is None or item["end_at"]>=now)),
+        key=lambda item:item["start_at"])
     return {**dict(counts),"total_leads":counts["total_leads"],"total_campaigns":counts["total_campaigns"],
         "approved_campaigns":counts["approved_campaigns"],"pending_approvals":counts["pending_approvals"],
         "queued_not_sent":counts["queued_not_sent"],"not_added_emails":counts["not_added_emails"],
@@ -111,6 +117,16 @@ async def get_dashboard_summary(pool, settings, *, activity_days: int=14) -> dic
         "reserved_daily_emails":reserved_capacity,
         "remaining_daily_emails":max(0,settings.outreach_daily_email_capacity-reserved_capacity),
         "queued_capacity_runs":capacity["queued_capacity_runs"],
+        "upcoming_capacity_runs":[{"campaign_name":item["campaign_name"],
+            "start_at":item["start_at"].isoformat(),"timezone":item.get("timezone") or "Asia/Karachi",
+            "capacity_state":item["capacity_state"],"provider_status":item.get("status") or "draft_created",
+            "estimated_daily_emails":int(item.get("requested_daily_emails") or 0),
+            "campaign_daily_cap":int(item.get("campaign_daily_cap") or 0)}
+            for item in upcoming_capacity_runs],
+        "upcoming_estimated_daily_emails":sum(int(item.get("requested_daily_emails") or 0)
+            for item in upcoming_capacity_runs),
+        "upcoming_campaign_daily_caps":sum(int(item.get("campaign_daily_cap") or 0)
+            for item in upcoming_capacity_runs),
         "activity":activity_json,"latest_run":latest,"recent_runs":recent_runs,
         "recent_completed_campaigns":[dict(x) for x in completed],
         "bounce_activity":{"available":True,"total":bounce_counts["total"],"hard":bounce_counts["hard"],"soft":bounce_counts["soft"],"unknown":bounce_counts["unknown"],"recent":[dict(x) for x in bounce]}}

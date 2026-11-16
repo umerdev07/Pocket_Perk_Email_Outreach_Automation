@@ -3,6 +3,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from app.config import Settings, get_settings
 from app.integrations.instantly_client import InstantlyError, list_sending_accounts
 from app.instantly_sender_service import is_sending_account_ready
+from app.instantly_capacity import fetch_workspace_capacity
 from app.instantly_sync_db import load_active_sender_usage
 
 router = APIRouter(prefix="/api/instantly", tags=["Instantly"])
@@ -31,6 +32,7 @@ async def instantly_capacity(request: Request, sender_emails: list[str] = Query(
         usage = await load_active_sender_usage(settings)
     except HTTPException:
         raise
+    workspace_capacity = await fetch_workspace_capacity(settings)
     selected = {email.strip().lower() for email in sender_emails if email.strip()}
     active_by_sender = usage["by_sender"]
     selected_by_sender = {email: active_by_sender.get(email, []) for email in sorted(selected)}
@@ -58,9 +60,9 @@ async def instantly_capacity(request: Request, sender_emails: list[str] = Query(
                           and item.get("capacity_state") == "reserved" and overlaps(item)}
     return {
         "new_leads_per_day_target": settings.outreach_new_leads_per_day,
-        "daily_email_capacity": settings.outreach_daily_email_capacity,
+        **workspace_capacity,
         "reserved_daily_emails": reserved,
-        "remaining_daily_emails": max(0, settings.outreach_daily_email_capacity - reserved),
+        "remaining_daily_emails": max(0, workspace_capacity["daily_email_capacity"] - reserved),
         "queued_capacity_runs": usage["queued_capacity_runs"],
         "active_campaign_count": usage["active_campaign_count"],
         "active_campaigns_using_selected_senders": len(selected_campaigns),
