@@ -1,7 +1,15 @@
 """PostgreSQL implementation of the campaign run API."""
+from datetime import datetime
+
 from fastapi import HTTPException
 
 from app.campaign_runs_db import _campaign_window_estimate
+
+
+def _schedule_end_datetime(value: str | None) -> datetime | None:
+    if value is None:
+        return None
+    return datetime.fromisoformat(str(value).replace("Z", "+00:00"))
 
 
 async def start_campaign_run(pool, campaign_id: str, batch_id: str, sender_emails: list[str] | None,
@@ -51,11 +59,12 @@ async def start_campaign_run(pool, campaign_id: str, batch_id: str, sender_email
             if estimate and estimate.get("too_long"):
                 raise HTTPException(status_code=422, detail="This batch would need more than two years at the selected inbox limits. Split the batch or select additional active inboxes before starting.")
             end_at = estimate.get("recommended_end_at") if estimate else None
+            schedule_end_at = _schedule_end_datetime(end_at)
             row = await conn.fetchrow(
                 """insert into public.campaign_runs(campaign_id,batch_id,status,total_leads,
                           sender_account_emails,schedule_end_at)
                      values($1::uuid,$2::uuid,'running',$3,$4,$5::timestamptz) returning id,status,total_leads""",
-                campaign_id,batch_id,int(batch["imported_count"]),sender_emails or [],end_at)
+                campaign_id,batch_id,int(batch["imported_count"]),sender_emails or [],schedule_end_at)
     output={"run_id":str(row["id"]),"status":row["status"],"total_leads":row["total_leads"]}
     if end_at:
         output["schedule_adjustment"]={"previous_end_at":campaign["end_at"].isoformat(),

@@ -80,3 +80,19 @@ def test_run_lead_emails_endpoint_returns_selected_lead_details():
     assert response.json() == expected
     get_emails.assert_awaited_once()
     assert get_emails.await_args.kwargs == {"pool": None}
+
+
+
+def test_schedule_end_timestamp_is_converted_for_postgres():
+    from datetime import datetime, timedelta, timezone
+
+    from app.campaign_runs_postgres import _schedule_end_datetime
+
+    value = "2026-11-21T23:59:00+05:00"
+    result = _schedule_end_datetime(value)
+
+    assert isinstance(result, datetime)
+    assert result == datetime(2026, 11, 21, 23, 59, tzinfo=timezone(
+        timedelta(hours=5)
+    ))
+    assert _schedule_end_datetime(None) is None
