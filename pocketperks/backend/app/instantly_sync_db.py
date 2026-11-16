@@ -31,6 +31,16 @@ async def load_active_sender_usage(settings: Settings, pool=None) -> dict:
     return await fn(_pool_or_fail(pool))
 
 
+async def claim_capacity_reservation(settings: Settings, run_id: str, daily_capacity: int, pool=None) -> bool:
+    from app.instantly_sync_postgres import claim_capacity_reservation as fn
+    return await fn(_pool_or_fail(pool), run_id, daily_capacity)
+
+
+async def get_capacity_reservation(settings: Settings, run_id: str, pool=None):
+    from app.instantly_sync_postgres import get_capacity_reservation as fn
+    return await fn(_pool_or_fail(pool), run_id)
+
+
 async def load_scheduled_campaign_windows(settings: Settings, pool=None) -> list[dict]:
     from app.instantly_sync_postgres import load_scheduled_campaign_windows as fn
     return await fn(_pool_or_fail(pool))

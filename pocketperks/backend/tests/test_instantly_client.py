@@ -83,6 +83,17 @@ def test_list_accounts_follows_pagination_cursor():
     assert FakeClient.calls[1][2]["starting_after"] == "2026-11-01T00:00:00Z&one@example.test"
 
 
+def test_list_accounts_excludes_the_external_praveen_mailbox():
+    reset(ok([
+        {"email": "Sona@example.test", "status": 1},
+        {"email": "Praveen@TakeawayMax.co.uk", "status": 1},
+    ]))
+    with patch.object(client.httpx, "AsyncClient", FakeClient):
+        result = asyncio.run(client.list_sending_accounts(cfg()))
+
+    assert [account["email"] for account in result] == ["Sona@example.test"]
+
+
 def test_rate_limit_retries_twice_with_backoff():
     reset(Response(429, {}), Response(429, {}), ok())
     with patch.object(client.httpx, "AsyncClient", FakeClient), \

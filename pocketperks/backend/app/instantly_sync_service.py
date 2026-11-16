@@ -6,10 +6,12 @@ lead sequence has synced and the configured start time has arrived.
 from datetime import UTC, date, datetime
 from zoneinfo import ZoneInfo
 from typing import Any
+from fastapi import HTTPException
 
 from app.config import Settings, get_settings
 from app.lead_eligibility import lead_eligibility_reason
 from app.instantly_sync_db import (create_campaign_mapping, get_lead_mapping_statuses,
+                                   get_campaign_mapping_for_run, claim_capacity_reservation,
                                    load_sync_run_context, load_sync_lead_page,
                                    save_lead_mappings, update_campaign_mapping)
 from app.integrations.instantly_client import (BadResponseError, InstantlyError,
@@ -220,6 +222,11 @@ async def sync_completed_run(settings: Settings, run_id: str, pool=None) -> dict
                                       if isinstance(email, str) and email.strip()))
     if not sender_emails:
         raise RuntimeError("No sending inbox was selected before this run; no Instantly campaign was created.")
+    existing_mapping=await get_campaign_mapping_for_run(settings,run_id,pool=pool)
+    if not existing_mapping or existing_mapping.get("status")!="completed":
+        admitted=await claim_capacity_reservation(settings,run_id,settings.outreach_daily_email_capacity,pool=pool)
+        if not admitted:
+            raise HTTPException(status_code=409,detail="Waiting for shared daily sending capacity. This campaign will continue automatically when capacity is available.")
     mapping = await create_campaign_mapping(settings, run_id, sender_emails,pool=pool)
     mapped_senders = list(dict.fromkeys(email.strip().lower()
                                         for email in mapping.get("sender_account_emails", [])

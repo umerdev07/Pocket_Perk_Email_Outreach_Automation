@@ -1,4 +1,6 @@
 """Native PostgreSQL dashboard aggregates with the existing response contract."""
+from datetime import UTC, datetime
+
 from fastapi import HTTPException
 
 
@@ -30,6 +32,8 @@ async def get_dashboard_run_detail(pool, run_id: str) -> dict:
 
 
 async def get_dashboard_summary(pool, settings, *, activity_days: int=14) -> dict:
+    from app.instantly_sync_postgres import load_active_sender_usage
+
     async with pool.acquire() as conn:
         counts=await conn.fetchrow("""select
             (select count(*) from public.leads) total_leads,
@@ -88,6 +92,14 @@ async def get_dashboard_summary(pool, settings, *, activity_days: int=14) -> dic
         "delivery_totals":{"queued":counts["queued_not_sent"],"not_added":counts["not_added_emails"]}}
     latest=None
     if latest_row: latest=await get_dashboard_run_detail(pool,str(latest_row["id"]))
+    capacity=await load_active_sender_usage(pool)
+    now=datetime.now(UTC)
+    active_capacity_runs={item["run_id"]:item for campaigns in capacity["by_sender"].values()
+        for item in campaigns if item.get("run_id")
+        and (item.get("start_at") is None or item["start_at"]<=now)
+        and (item.get("end_at") is None or item["end_at"]>=now)}
+    reserved_capacity=sum(int(item.get("reserved_daily_emails") or 0)
+        for item in active_capacity_runs.values())
     return {**dict(counts),"total_leads":counts["total_leads"],"total_campaigns":counts["total_campaigns"],
         "approved_campaigns":counts["approved_campaigns"],"pending_approvals":counts["pending_approvals"],
         "queued_not_sent":counts["queued_not_sent"],"not_added_emails":counts["not_added_emails"],
@@ -95,6 +107,10 @@ async def get_dashboard_summary(pool, settings, *, activity_days: int=14) -> dic
         "instantly_campaigns":counts["instantly_campaigns"],"instantly_leads_synced":counts["instantly_leads_synced"],
         "instantly_active_campaigns":counts["instantly_active_campaigns"],"instantly_completed_campaigns":counts["instantly_completed_campaigns"],
         "instantly_auto_launch_enabled":settings.instantly_auto_launch and settings.send_mode=='live',
+        "daily_email_capacity":settings.outreach_daily_email_capacity,
+        "reserved_daily_emails":reserved_capacity,
+        "remaining_daily_emails":max(0,settings.outreach_daily_email_capacity-reserved_capacity),
+        "queued_capacity_runs":capacity["queued_capacity_runs"],
         "activity":activity_json,"latest_run":latest,"recent_runs":recent_runs,
         "recent_completed_campaigns":[dict(x) for x in completed],
         "bounce_activity":{"available":True,"total":bounce_counts["total"],"hard":bounce_counts["hard"],"soft":bounce_counts["soft"],"unknown":bounce_counts["unknown"],"recent":[dict(x) for x in bounce]}}

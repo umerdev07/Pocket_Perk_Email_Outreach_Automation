@@ -14,13 +14,17 @@ async def update_campaign_mapping(pool,mapping_id,values):
     allowed={"instantly_campaign_id","status","error_detail","sender_account_emails"}
     if not values or set(values)-allowed:raise ValueError("Only provider campaign ID, status, and safe error detail can be updated.")
     async with pool.acquire() as conn:
-        row=await conn.fetchrow("""update public.instantly_campaign_mappings set
-            instantly_campaign_id=coalesce($2,instantly_campaign_id),status=coalesce($3,status),
-            error_detail=case when $4 then $5 else error_detail end,
-            sender_account_emails=coalesce($6,sender_account_emails),updated_at=now()
-            where id=$1::uuid returning *""",mapping_id,values.get("instantly_campaign_id"),values.get("status"),
-            "error_detail" in values,values.get("error_detail"),values.get("sender_account_emails"))
-    if not row:raise HTTPException(status_code=404,detail="Instantly campaign mapping not found.")
+        async with conn.transaction():
+            row=await conn.fetchrow("""update public.instantly_campaign_mappings set
+                instantly_campaign_id=coalesce($2,instantly_campaign_id),status=coalesce($3,status),
+                error_detail=case when $4 then $5 else error_detail end,
+                sender_account_emails=coalesce($6,sender_account_emails),updated_at=now()
+                where id=$1::uuid returning *""",mapping_id,values.get("instantly_campaign_id"),values.get("status"),
+                "error_detail" in values,values.get("error_detail"),values.get("sender_account_emails"))
+            if not row:raise HTTPException(status_code=404,detail="Instantly campaign mapping not found.")
+            if values.get("status")=="completed":
+                await conn.execute("""update public.campaign_capacity_reservations set state='completed',updated_at=now()
+                    where run_id=$1::uuid""",row["run_id"])
     return dict(row)
 
 
@@ -32,11 +36,54 @@ async def get_campaign_mapping_for_run(pool,run_id):
 
 async def load_active_sender_usage(pool):
     async with pool.acquire() as conn:
-        rows=await conn.fetch("select run_id,status,sender_account_emails from public.instantly_campaign_mappings where status=any($1::text[]) and instantly_campaign_id is not null",["active","scheduled","launching"])
+        rows=await conn.fetch("""select r.id run_id,m.status,campaigns.name campaign_name,
+                    reservations.requested_daily_emails,campaigns.start_at,reservations.window_end end_at,
+                    reservations.state,r.sender_account_emails
+               from public.campaign_capacity_reservations reservations
+               join public.campaign_runs r on r.id=reservations.run_id
+               join public.campaigns campaigns on campaigns.id=r.campaign_id
+               left join public.instantly_campaign_mappings m on m.run_id=r.id
+              where reservations.state=any($1::text[])""",["queued","reserved"])
     by={}
     for r in rows:
-        for sender in r["sender_account_emails"] or []:by.setdefault(sender.strip().lower(),[]).append({"run_id":str(r["run_id"]),"status":r["status"]})
-    return {"active_campaign_count":len(rows),"by_sender":by}
+        reserved=int(r["requested_daily_emails"] or 0) if r["state"]=="reserved" else 0
+        item={"run_id":str(r["run_id"]),"status":r["status"],"campaign_name":r["campaign_name"],
+              "reserved_daily_emails":reserved,"requested_daily_emails":int(r["requested_daily_emails"] or 0),
+              "capacity_state":r["state"],"start_at":r["start_at"],"end_at":r["end_at"]}
+        for sender in r["sender_account_emails"] or []:by.setdefault(sender.strip().lower(),[]).append(item)
+    return {"active_campaign_count":sum(1 for r in rows if r["state"]=="reserved"),"reserved_daily_emails":sum(
+                int(r["requested_daily_emails"] or 0) for r in rows if r["state"]=="reserved"),
+            "queued_capacity_runs":sum(1 for r in rows if r["state"]=="queued"),"by_sender":by}
+
+
+async def claim_capacity_reservation(pool,run_id,daily_capacity):
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            await conn.execute("select pg_advisory_xact_lock(hashtext($1))","pocketperks-daily-email-capacity")
+            reservation=await conn.fetchrow("select * from public.campaign_capacity_reservations where run_id=$1::uuid for update",run_id)
+            if not reservation:return True
+            if reservation["state"]=="reserved":return True
+            if reservation["state"]!="queued":return False
+            older=await conn.fetchval("""select exists(select 1 from public.campaign_capacity_reservations
+                where state='queued' and queue_order<$1 and window_start<=$3 and window_end>=$2)""",
+                reservation["queue_order"],reservation["window_start"],reservation["window_end"])
+            if older:return False
+            used=await conn.fetchval("""select coalesce(sum(requested_daily_emails),0)
+                from public.campaign_capacity_reservations where state='reserved'
+                and window_start<=$2 and window_end>=$1""",reservation["window_start"],reservation["window_end"])
+            if int(used or 0)+int(reservation["requested_daily_emails"])>daily_capacity:return False
+            await conn.execute("""update public.campaign_capacity_reservations
+                set state='reserved',admitted_at=now(),updated_at=now() where run_id=$1::uuid""",run_id)
+            return True
+
+
+async def get_capacity_reservation(pool,run_id):
+    async with pool.acquire() as conn:
+        return await conn.fetchrow("""select state,requested_daily_emails,window_start,window_end,
+            (select count(*) from public.campaign_capacity_reservations older
+              where older.state='queued' and older.queue_order<r.queue_order
+                and older.window_start<=r.window_end and older.window_end>=r.window_start)+1 queue_position
+            from public.campaign_capacity_reservations r where run_id=$1::uuid""",run_id)
 
 
 async def load_scheduled_campaign_windows(pool):
@@ -137,9 +184,13 @@ async def load_campaigns_for_provider_reconciliation(pool,*,run_id=None,limit=50
 
 async def record_provider_campaign_check(pool,mapping_id,*,deleted=False):
     async with pool.acquire() as conn:
-        await conn.execute("""update public.instantly_campaign_mappings
-            set provider_checked_at=now(),provider_deleted_at=case when $2 then now() else provider_deleted_at end,
-                updated_at=now() where id=$1::uuid""",mapping_id,deleted)
+        async with conn.transaction():
+            row=await conn.fetchrow("""update public.instantly_campaign_mappings
+                set provider_checked_at=now(),provider_deleted_at=case when $2 then now() else provider_deleted_at end,
+                    updated_at=now() where id=$1::uuid returning run_id""",mapping_id,deleted)
+            if deleted and row:
+                await conn.execute("""update public.campaign_capacity_reservations set state='released',updated_at=now()
+                    where run_id=$1::uuid""",row["run_id"])
 
 
 async def load_active_runs_with_pending_leads(pool,*,limit=100,auto_launch=False):

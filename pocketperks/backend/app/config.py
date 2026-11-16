@@ -39,6 +39,8 @@ class Settings(BaseSettings):
     personalization_batch_size: int = Field(default=25, ge=1, le=250)
     # Operational target for new first-touch leads; follow-up sends are additional.
     outreach_new_leads_per_day: int = Field(default=100, ge=1, le=100000)
+    # Shared upper bound across all Instantly campaigns in this workspace.
+    outreach_daily_email_capacity: int = Field(default=200, ge=1, le=100000)
 
 
 @lru_cache

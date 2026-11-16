@@ -26,6 +26,9 @@ PAGE_SIZE = 100
 MAX_LEADS_PER_REQUEST = 1000
 MAX_RETRIES = 2
 RETRY_BASE_SECONDS = 0.5
+# This mailbox belongs to an external team and must not be exposed or assigned
+# by PocketPerks. Instantly's account-list API has no server-side email filter.
+EXCLUDED_SENDING_ACCOUNT_EMAILS = {"praveen@takeawaymax.co.uk"}
 
 
 class InstantlyError(Exception):
@@ -136,7 +139,10 @@ async def list_sending_accounts(settings: Settings | None = None) -> list[dict[s
     async with httpx.AsyncClient(timeout=30.0) as session:
         while True:
             payload = await _get_page(session, headers, cursor)
-            accounts.extend(_safe_account(account) for account in payload["items"])
+            accounts.extend(
+                _safe_account(account) for account in payload["items"]
+                if str(account.get("email", "")).strip().lower() not in EXCLUDED_SENDING_ACCOUNT_EMAILS
+            )
             cursor = payload.get("next_starting_after")
             if not cursor:
                 return accounts

@@ -74,7 +74,8 @@ async def start_campaign_run(settings: Settings, campaign_id: str, batch_id: str
                              sender_emails: list[str] | None = None,
                              sender_accounts: list[dict] | None = None, pool=None) -> dict:
     from app.campaign_runs_postgres import start_campaign_run as fn
-    return await fn(_require_pool(pool), campaign_id, batch_id, sender_emails, sender_accounts)
+    return await fn(_require_pool(pool), campaign_id, batch_id, sender_emails,
+                    sender_accounts, settings.outreach_daily_email_capacity)
 
 
 async def get_campaign_run(settings: Settings, run_id: str, pool=None) -> dict | None:

@@ -13,13 +13,16 @@ def _schedule_end_datetime(value: str | None) -> datetime | None:
 
 
 async def start_campaign_run(pool, campaign_id: str, batch_id: str, sender_emails: list[str] | None,
-                            sender_accounts: list[dict] | None) -> dict:
+                            sender_accounts: list[dict] | None, daily_capacity: int = 200) -> dict:
     async with pool.acquire() as conn:
         async with conn.transaction():
             await conn.execute("select pg_advisory_xact_lock(hashtext($1),hashtext($2))", campaign_id,batch_id)
+            # Serialize starts so two requests cannot both reserve the same
+            # remaining workspace sending capacity.
+            await conn.execute("select pg_advisory_xact_lock(hashtext($1))", "pocketperks-daily-email-capacity")
             campaign = await conn.fetchrow(
                 """select c.id,c.status,c.start_at,c.end_at,c.timezone,c.daily_send_start,
-                          c.daily_send_end,c.sending_days,
+                          c.daily_send_end,c.sending_days,c.daily_email_limit,c.total_emails,
                           coalesce(jsonb_agg(jsonb_build_object('step_number',s.step_number,
                             'delay_days',s.delay_days,'delay_minutes',s.delay_minutes,
                             'trigger_type',s.trigger_type) order by s.step_number)
@@ -58,6 +61,25 @@ async def start_campaign_run(pool, campaign_id: str, batch_id: str, sender_email
             estimate = _campaign_window_estimate(dict(campaign), int(batch["imported_count"]), sender_accounts) if sender_accounts else None
             if estimate and estimate.get("too_long"):
                 raise HTTPException(status_code=422, detail="This batch would need more than two years at the selected inbox limits. Split the batch or select additional active inboxes before starting.")
+            requested_start = campaign["start_at"]
+            requested_end = _schedule_end_datetime(estimate.get("recommended_end_at") if estimate else None) or campaign["end_at"]
+            reserved = int(await conn.fetchval("""select coalesce(sum(requested_daily_emails),0)
+                from public.campaign_capacity_reservations where state='reserved'
+                and window_start<=$2 and window_end>=$1""",requested_start,requested_end) or 0)
+            automatic_steps = sum(1 for step in steps
+                                  if step.get("trigger_type", "scheduled") != "after_conversation")
+            requested = min(int(campaign["daily_email_limit"] or 100),
+                            int(batch["imported_count"]) * max(1, automatic_steps))
+            if requested > daily_capacity:
+                raise HTTPException(status_code=422, detail=(
+                    f"This run needs a campaign cap of {requested} emails per day, above the workspace limit "
+                    f"of {daily_capacity}. Lower this campaign's daily email limit before starting it."
+                ))
+            older_queued = await conn.fetchval("""select exists(
+                select 1 from public.campaign_capacity_reservations
+                 where state='queued' and window_start<=$2 and window_end>=$1
+            )""", requested_start, requested_end)
+            capacity_state="reserved" if not older_queued and reserved+requested<=daily_capacity else "queued"
             end_at = estimate.get("recommended_end_at") if estimate else None
             schedule_end_at = _schedule_end_datetime(end_at)
             row = await conn.fetchrow(
@@ -65,7 +87,12 @@ async def start_campaign_run(pool, campaign_id: str, batch_id: str, sender_email
                           sender_account_emails,schedule_end_at)
                      values($1::uuid,$2::uuid,'running',$3,$4,$5::timestamptz) returning id,status,total_leads""",
                 campaign_id,batch_id,int(batch["imported_count"]),sender_emails or [],schedule_end_at)
-    output={"run_id":str(row["id"]),"status":row["status"],"total_leads":row["total_leads"]}
+            await conn.execute("""insert into public.campaign_capacity_reservations
+                (run_id,requested_daily_emails,window_start,window_end,state,admitted_at)
+                values($1::uuid,$2,$3,$4,$5,case when $5='reserved' then now() else null end)""",
+                row["id"],requested,campaign["start_at"],schedule_end_at or campaign["end_at"],capacity_state)
+    output={"run_id":str(row["id"]),"status":row["status"],"total_leads":row["total_leads"],
+            "capacity_status":capacity_state,"capacity_reserved_emails":requested if capacity_state=="reserved" else 0}
     if end_at:
         output["schedule_adjustment"]={"previous_end_at":campaign["end_at"].isoformat(),
             "new_end_at":end_at,"timezone":campaign["timezone"],"buffer_sending_windows":1}
@@ -93,6 +120,17 @@ async def get_campaign_run_instantly_status(pool, run_id: str) -> dict:
         if not run: raise HTTPException(status_code=404,detail="Campaign run not found.")
         mapping=await conn.fetchrow("select id,instantly_campaign_id,status,error_detail,sender_account_emails,updated_at from public.instantly_campaign_mappings where run_id=$1::uuid",run_id)
         if not mapping:
+            reservation=await conn.fetchrow("""select state,requested_daily_emails,
+                (select count(*) from public.campaign_capacity_reservations older
+                  where older.state='queued' and older.queue_order<r.queue_order
+                    and older.window_start<=r.window_end and older.window_end>=r.window_start)+1 queue_position
+                from public.campaign_capacity_reservations r where run_id=$1::uuid""",run_id)
+            if reservation and reservation["state"]=="queued":
+                return {"run_id":run_id,"status":"waiting_capacity","instantly_campaign_id":None,
+                    "synced_leads":0,"pending_leads":0,"failed_leads":0,"skipped_leads":0,
+                    "requested_daily_emails":reservation["requested_daily_emails"],
+                    "capacity_queue_position":reservation["queue_position"],
+                    "error_detail":"Waiting for shared daily sending capacity."}
             return {"run_id":run_id,"status":"waiting","instantly_campaign_id":None,"synced_leads":0,
                 "pending_leads":0,"failed_leads":0,"skipped_leads":0,"error_detail":None,"sender_account_emails":[]}
         counts=await conn.fetchrow("""select count(*) filter(where status='synced') as synced,

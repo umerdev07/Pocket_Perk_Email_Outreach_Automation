@@ -42,6 +42,10 @@ type Summary = {
   instantly_active_campaigns: number;
   instantly_completed_campaigns: number;
   instantly_auto_launch_enabled: boolean;
+  daily_email_capacity: number;
+  reserved_daily_emails: number;
+  remaining_daily_emails: number;
+  queued_capacity_runs: number;
   recent_completed_campaigns: { campaign_name: string; completed_at: string }[];
   latest_run: RunDetail | null;
   recent_runs: { run_id: string; campaign_name: string; status: string; sync_status: string;
@@ -155,6 +159,8 @@ export default function DashboardSummary({ apiBase, refreshKey, onNavigate }: Pr
     { label: "Bounce events", value: summary.bounce_activity?.total || 0, hint: summary.bounce_activity?.available === false ? "Details unavailable" : `${summary.bounce_activity?.hard || 0} hard · ${summary.bounce_activity?.soft || 0} temporary · ${summary.bounce_activity?.unknown || 0} need review`, tone: "amber" },
     { label: "Emails being prepared", value: summary.active_runs, hint: "Currently processing", tone: "blue" },
     { label: "Active sending campaigns", value: summary.instantly_active_campaigns, hint: `${summary.instantly_completed_campaigns} completed · ${Math.max(0, summary.instantly_campaigns - summary.instantly_active_campaigns - summary.instantly_completed_campaigns)} other provider records may be drafts, scheduled, paused or need attention${summary.instantly_auto_launch_enabled ? " · automatic start on" : " · automatic start is off"}`, tone: "violet" },
+    { label: "Shared sending capacity", value: `${summary.remaining_daily_emails} / ${summary.daily_email_capacity}`, hint: `emails/day remaining · ${summary.reserved_daily_emails} reserved by active campaigns`, tone: "blue" },
+    { label: "Waiting for sending capacity", value: summary.queued_capacity_runs, hint: "Campaigns will sync automatically as capacity opens", tone: "amber" },
     { label: "Leads added to campaigns", value: summary.instantly_leads_synced, hint: "Ready for scheduled sending", tone: "green" },
     { label: "Lead replies", value: summary.total_replies, hint: `${summary.unread_replies} unread in PocketPerks`, tone: "amber" },
   ] : [];
