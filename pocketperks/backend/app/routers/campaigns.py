@@ -7,7 +7,7 @@ from uuid import UUID
 from app import campaigns_postgres
 from app.config import Settings, get_settings
 from app.campaign_control_service import pause_campaigns, resume_campaigns
-from app.context_validation import context_issue
+from app.context_validation import campaign_instructions_issue, context_issue
 
 router = APIRouter(prefix="/api/campaigns", tags=["campaigns"])
 
@@ -32,6 +32,9 @@ class CampaignCreate(BaseModel):
 
     @model_validator(mode="after")
     def validate_contexts(self):
+        instructions_error = campaign_instructions_issue(self.instructions, campaign_name=self.name)
+        if instructions_error:
+            raise ValueError(f"Campaign instructions: {instructions_error}")
         if len(self.contexts) != self.total_emails:
             raise ValueError("contexts must contain one item per email step")
         if any(not context.strip() for context in self.contexts):

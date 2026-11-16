@@ -1,6 +1,6 @@
 import json
 
-from app.context_validation import context_alignment_issue, context_issue
+from app.context_validation import campaign_instructions_issue, context_alignment_issue, context_issue
 from app.services.outreach_guidance import category_for_copy, verified_sector_for_lead
 from app.services.personalization_service import _personalization_messages
 
@@ -8,6 +8,14 @@ from app.services.personalization_service import _personalization_messages
 def test_random_context_is_rejected_but_relevant_context_is_accepted():
     assert context_issue("sdnakj")
     assert context_issue("Introduce PocketPerks digital loyalty card and invite demo") is None
+
+
+def test_campaign_instructions_need_a_relevant_topic_and_clear_action():
+    assert campaign_instructions_issue("sdnakj")
+    assert campaign_instructions_issue("Café loyalty stamps")
+    assert campaign_instructions_issue(
+        "Introduce the PocketPerks loyalty card to café owners and invite them to a demo."
+    ) is None
 
 
 def test_generated_copy_must_reflect_context_topics():

@@ -28,6 +28,17 @@ def test_context_count_mismatch_is_rejected():
     save.assert_not_awaited()
 
 
+def test_random_campaign_instructions_are_rejected_before_save():
+    with patch("app.routers.campaigns.campaigns_postgres.create_campaign", new=AsyncMock()) as save:
+        response = client().post("/api/campaigns", json={
+            "name": "Cafe outreach", "total_emails": 1,
+            "instructions": "sdnakj", "start_date": "2026-11-01",
+            "end_date": "2026-11-30", "contexts": ["Introduce the digital loyalty card"],
+        })
+    assert response.status_code == 422
+    save.assert_not_awaited()
+
+
 def test_email_count_outside_bounds_is_rejected():
     for count in (0, 11):
         response = client().post("/api/campaigns", json={

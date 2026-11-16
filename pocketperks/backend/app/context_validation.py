@@ -26,6 +26,11 @@ _RELEVANT_TERMS = {
     "thank", "polite", "friendly", "brief", "concise", "simple", "setup", "qr", "monthly",
     "subscription", "fee", "price", "pricing", "cost", "free", "paper", "marketing", "appointment",
 }
+_INSTRUCTION_ACTIONS = {
+    "ask", "describe", "demonstrate", "discuss", "emphasize", "explain", "focus",
+    "highlight", "introduce", "invite", "mention", "outline", "present", "promote",
+    "remind", "request", "share", "show", "thank", "clarify", "follow", "address",
+}
 _CONCEPTS = {
     "loyalty": {"loyalty", "stamp", "stamps", "reward", "rewards"},
     "card": {"card", "cards", "loyalty", "stamp", "stamps"},
@@ -68,6 +73,26 @@ def context_issue(context: str, *, campaign_name: str = "", instructions: str = 
     campaign_terms = set(_tokens(campaign_name + " " + instructions)) - _STOP_WORDS
     if not (set(content) & (_RELEVANT_TERMS | campaign_terms)):
         return "Keep the context connected to the campaign topic or PocketPerks offer. " + CONTEXT_HELP
+    return None
+
+
+def campaign_instructions_issue(instructions: str, *, campaign_name: str = "") -> str | None:
+    """Require a readable campaign goal with a relevant topic and clear action."""
+    text = str(instructions or "").strip()
+    if not text:
+        return "Describe the campaign goal and what each email should communicate."
+    if len(text) > 1200:
+        return "Keep campaign instructions under 1,200 characters and focused on this campaign."
+    content = [word for word in _tokens(text) if word not in _STOP_WORDS and len(word) > 1]
+    if len(content) < 3:
+        return "Add a clear campaign goal, relevant PocketPerks topic, and what you want the email to do."
+    alphabetic = [word for word in content if len(word) >= 4]
+    if alphabetic and sum(not any(char in "aeiouy" for char in word) for word in alphabetic) > len(alphabetic) // 2:
+        return "These instructions look random or unreadable. Write a clear campaign goal and relevant message."
+    has_action = bool(set(content) & _INSTRUCTION_ACTIONS)
+    has_topic = bool(set(content) & _RELEVANT_TERMS)
+    if not has_action or not has_topic:
+        return "Explain what to communicate and connect it to the PocketPerks offer or campaign audience."
     return None
 
 
