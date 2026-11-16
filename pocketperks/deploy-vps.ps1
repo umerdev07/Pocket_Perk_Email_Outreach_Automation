@@ -29,7 +29,8 @@ if ($LASTEXITCODE -ne 0 -or -not $commit) {
     throw "Could not identify the main commit to deploy."
 }
 
-$zipPath = Join-Path $repoRoot "pocketperks-main-$commit.zip"
+$archiveStamp = [DateTime]::UtcNow.ToString("yyyyMMddHHmmss")
+$zipPath = Join-Path $repoRoot "pocketperks-main-$commit-$archiveStamp.zip"
 $archiveTree = "${commit}:pocketperks"
 & git -C $repoRoot archive --format=zip "--output=$zipPath" $archiveTree
 if ($LASTEXITCODE -ne 0) {
