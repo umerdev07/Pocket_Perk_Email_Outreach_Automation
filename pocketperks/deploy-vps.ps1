@@ -33,8 +33,9 @@ $archiveStamp = [DateTime]::UtcNow.ToString("yyyyMMddHHmmss")
 $zipPath = Join-Path $repoRoot "pocketperks-main-$commit-$archiveStamp.zip"
 $archiveTree = "${commit}:pocketperks"
 & git -C $repoRoot archive --format=zip "--output=$zipPath" $archiveTree
-if ($LASTEXITCODE -ne 0) {
-    throw "Could not create the source archive."
+$archiveExitCode = $LASTEXITCODE
+if (-not (Test-Path -LiteralPath $zipPath) -or (Get-Item -LiteralPath $zipPath).Length -lt 100) {
+    throw "Could not create the source archive (git exit code $archiveExitCode)."
 }
 
 Add-Type -AssemblyName System.IO.Compression.FileSystem
