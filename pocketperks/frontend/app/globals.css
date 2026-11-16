@@ -638,3 +638,4 @@ button,input,select,textarea{font-family:Inter,"Segoe UI Variable","Segoe UI",Ro
   .landing-section-heading h2,.landing-demo h2{font-size:34px}
   .landing-faq-heading h2{font-size:32px}
 }
+.context-guidance{margin:4px 0 12px;color:#52665b;font-size:12px;line-height:1.6}.context-error{display:block;margin-top:6px;color:#b42318;font-size:12px;font-weight:600}.context-field textarea[aria-invalid="true"]{border-color:#d92d20;background:#fffafa}

@@ -25,7 +25,8 @@ def _client():
 def test_generate_creates_a_draft_for_each_step():
     with patch("app.services.draft_service._load_campaign", new=AsyncMock(return_value=CAMPAIGN)), \
          patch("app.services.draft_service.chat_completion_json", new=AsyncMock(side_effect=[
-             {"subject": "One", "body": "Hi there, first"}, {"subject": "Two", "body": "Hi there, follow-up"}])) as ai, \
+             {"subject": "One", "body": "Introduce the digital loyalty stamp card."},
+             {"subject": "Two", "body": "Hi there, following up on the digital loyalty card."}])) as ai, \
          patch("app.services.draft_service._save_draft", new=AsyncMock(side_effect=lambda _s, step, sub, body, _pool: {"step_id": step, "subject": sub, "body": body})) as save:
         result = asyncio.run(generate_campaign_drafts(Settings(_env_file=None, claude_api_key="test-key",
                                                                claude_model="claude-sonnet-5-5"), "camp-1", object()))

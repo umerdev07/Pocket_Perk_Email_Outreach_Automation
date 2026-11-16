@@ -7,6 +7,7 @@ from uuid import UUID
 from app import campaigns_postgres
 from app.config import Settings, get_settings
 from app.campaign_control_service import pause_campaigns, resume_campaigns
+from app.context_validation import context_issue
 
 router = APIRouter(prefix="/api/campaigns", tags=["campaigns"])
 
@@ -35,6 +36,10 @@ class CampaignCreate(BaseModel):
             raise ValueError("contexts must contain one item per email step")
         if any(not context.strip() for context in self.contexts):
             raise ValueError("each context must contain non-empty text")
+        for index, context in enumerate(self.contexts, start=1):
+            issue = context_issue(context, campaign_name=self.name, instructions=self.instructions)
+            if issue:
+                raise ValueError(f"Email {index} context: {issue}")
         if self.step_triggers is None:
             self.step_triggers = ["scheduled"] * self.total_emails
         if self.step_delays_minutes is None:

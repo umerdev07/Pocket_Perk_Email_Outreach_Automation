@@ -10,7 +10,9 @@ def settings():
 
 
 def context(leads, step_count=2):
-    steps = [{"id": f"step-{n}", "step_number": n, "context": f"Context {n}",
+    contexts = ["Introduce a digital loyalty card and invite a demo",
+                "Follow up on the digital loyalty card and invite a demo"]
+    steps = [{"id": f"step-{n}", "step_number": n, "context": contexts[n - 1],
               "draft": {"subject": f"Subject {n}", "body": f"Approved body {n}"}}
              for n in range(1, step_count + 1)]
     return {"run": {"id": "run-1"},
@@ -29,7 +31,8 @@ def test_run_creates_linked_generated_email_per_step():
         progress.append(values)
     with patch("app.services.personalization_service.load_run_context", new=AsyncMock(return_value=context(leads))), \
          patch("app.services.personalization_service.chat_completion_json", new=AsyncMock(side_effect=[
-             {"subject": "Personal 1", "body": "Body 1"}, {"subject": "Personal 2", "body": "Body 2"}])) as ai, \
+             {"subject": "Personal 1", "body": "A digital loyalty card for customers. Would you be open to a demo?"},
+             {"subject": "Personal 2", "body": "Following up on the digital loyalty card. Would you be open to a demo?"}])) as ai, \
          patch("app.services.personalization_service.assess_personalized_email", new=AsyncMock(return_value={
              "risk_level": "LOW", "risk_reason": "All checks passed."})) as assess, \
          patch("app.services.personalization_service.save_personalized_email", new=AsyncMock(side_effect=save)), \
@@ -41,7 +44,7 @@ def test_run_creates_linked_generated_email_per_step():
                                  ("run-1", "lead-1", "campaign-1", "step-2", "queued", "LOW")]
     assert "Cafe Example" in ai.await_args_list[0].args[0][1]["content"]
     assert assess.await_args_list[0].kwargs["campaign"]["instructions"] == "Use approved draft facts only"
-    assert assess.await_args_list[0].kwargs["step"]["context"] == "Context 1"
+    assert assess.await_args_list[0].kwargs["step"]["context"] == "Introduce a digital loyalty card and invite a demo"
     assert progress[-1]["status"] == "completed"
     assert progress[-1]["processed"] == 1
 
@@ -70,7 +73,7 @@ def test_one_lead_failure_does_not_stop_following_lead():
         updates.append(values)
     with patch("app.services.personalization_service.load_run_context", new=AsyncMock(return_value=context(leads, 1))), \
          patch("app.services.personalization_service.chat_completion_json", new=AsyncMock(side_effect=[
-             RuntimeError("model error"), {"subject": "Good", "body": "Generated"}])), \
+             RuntimeError("model error"), {"subject": "Good", "body": "A digital loyalty card for Cafe Good."}])), \
          patch("app.services.personalization_service.assess_personalized_email", new=AsyncMock(return_value={
              "risk_level": "LOW", "risk_reason": "All checks passed."})), \
          patch("app.services.personalization_service.save_personalized_email", new=AsyncMock(side_effect=save)), \
@@ -98,7 +101,7 @@ def test_large_run_uses_bounded_concurrency_and_chunked_progress():
         maximum_active = max(maximum_active, active)
         await asyncio.sleep(0)
         active -= 1
-        return {"subject": "Subject", "body": "Body"}
+        return {"subject": "Subject", "body": "A digital loyalty card for customers. Would you be open to a demo?"}
 
     async def save(_settings, payload):
         return payload
@@ -133,7 +136,7 @@ def test_large_run_loads_leads_as_database_pages():
          patch("app.services.personalization_service.get_existing_personalization_keys", new=AsyncMock(return_value=set())), \
          patch("app.services.personalization_service.get_suppressed_emails", new=AsyncMock(return_value=set())), \
          patch("app.services.personalization_service.chat_completion_json", new=AsyncMock(return_value={
-             "subject": "Subject", "body": "Body"})), \
+             "subject": "Subject", "body": "A digital loyalty card for customers. Would you be open to a demo?"})), \
          patch("app.services.personalization_service.assess_personalized_email", new=AsyncMock(return_value={
              "risk_level": "LOW", "risk_reason": "All checks passed."})), \
          patch("app.services.personalization_service.save_personalized_email", new=AsyncMock()), \

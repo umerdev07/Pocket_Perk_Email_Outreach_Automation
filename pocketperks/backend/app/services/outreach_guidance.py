@@ -37,17 +37,39 @@ _SECTOR_GUIDANCE = {
 }
 
 
-def sector_guidance_for(category: object) -> str:
-    """Choose only a sector lens supported by the imported category field."""
-    normalized = " ".join(str(category or "").casefold().replace("&", "and").split())
+def _sector_from_text(value: object) -> str | None:
+    normalized = " ".join(str(value or "").casefold().replace("&", "and").split())
+    found = set()
     if any(term in normalized for term in ("sandwich", "takeaway sandwich")):
-        sector = "sandwich_shop"
-    elif any(term in normalized for term in ("barber", "barbershop", "barber shop")):
-        sector = "barber"
-    elif any(term in normalized for term in ("cafe", "café", "coffee shop", "coffeehouse")):
-        sector = "cafe"
-    elif any(term in normalized for term in ("restaurant", "bistro", "dining")):
-        sector = "restaurant"
-    else:
-        sector = "general"
-    return _SECTOR_GUIDANCE[sector]
+        found.add("sandwich_shop")
+    if any(term in normalized for term in ("barber", "barbershop", "barber shop")):
+        found.add("barber")
+    if any(term in normalized for term in ("cafe", "café", "coffee shop", "coffeehouse")):
+        found.add("cafe")
+    if any(term in normalized for term in ("restaurant", "bistro", "dining")):
+        found.add("restaurant")
+    return next(iter(found)) if len(found) == 1 else None
+
+
+def verified_sector_for_lead(category: object, business_name: object = "") -> str | None:
+    """Prefer an explicit sector in the business name over a conflicting import label."""
+    category_sector = _sector_from_text(category)
+    name_sector = _sector_from_text(business_name)
+    if name_sector:
+        return name_sector
+    return category_sector or name_sector
+
+
+def category_for_copy(category: object, business_name: object = "") -> object:
+    """Use a clear business-name sector when the imported category contradicts it."""
+    name_sector = _sector_from_text(business_name)
+    category_sector = _sector_from_text(category)
+    if name_sector and category_sector and name_sector != category_sector:
+        return name_sector
+    return category
+
+
+def sector_guidance_for(category: object, business_name: object = "") -> str:
+    """Choose a sector lens only when the lead data is internally consistent."""
+    sector = verified_sector_for_lead(category, business_name)
+    return _SECTOR_GUIDANCE.get(sector or "general", _SECTOR_GUIDANCE["general"])

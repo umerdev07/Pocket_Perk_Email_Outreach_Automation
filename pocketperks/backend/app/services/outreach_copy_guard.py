@@ -2,7 +2,9 @@
 import json
 import re
 
+from app.context_validation import context_alignment_issue
 from app.integrations.claude_client import chat_completion_json
+from app.services.outreach_guidance import verified_sector_for_lead
 
 
 class OutreachCopyValidationError(RuntimeError):
@@ -55,7 +57,8 @@ def _copy_sector_issue(subject: str, body: str, *, campaign: dict,
     if business_name:
         text = re.sub(re.escape(business_name), " ", text, flags=re.I)
     mentioned = {sector for sector, pattern in _SECTOR_PATTERNS.items() if pattern.search(text)}
-    expected = _sector_for_category((lead or {}).get("business_category")) if lead else _campaign_sector(campaign, step)
+    expected = (verified_sector_for_lead((lead or {}).get("business_category"), business_name)
+                if lead else _campaign_sector(campaign, step))
     if not mentioned:
         return None
     if expected is None:
@@ -67,6 +70,13 @@ def _copy_sector_issue(subject: str, body: str, *, campaign: dict,
 
 def validate_outreach_copy(subject: str, body: str, *, campaign: dict,
                            step: dict, lead: dict | None = None) -> str | None:
+    context_issue = context_alignment_issue(
+        str(step.get("context") or ""), subject, body,
+        campaign_name=str(campaign.get("name") or ""),
+        instructions=str(campaign.get("instructions") or ""),
+    )
+    if context_issue:
+        return context_issue
     if has_internal_source_reference(subject, body):
         return "Remove internal kit, source, prompt, or campaign-brief references from recipient-facing copy."
     return _copy_sector_issue(subject, body, campaign=campaign, step=step, lead=lead)
@@ -76,6 +86,14 @@ async def generate_validated_copy(messages: list[dict], settings, *, campaign: d
                                   step: dict, lead: dict | None = None,
                                   generator=chat_completion_json) -> tuple[str, str]:
     """Generate once, request one correction for policy issues, then fail closed."""
+    from app.context_validation import context_issue
+    issue = context_issue(
+        str(step.get("context") or ""),
+        campaign_name=str(campaign.get("name") or ""),
+        instructions=str(campaign.get("instructions") or ""),
+    )
+    if issue:
+        raise OutreachCopyValidationError(issue)
     request = list(messages)
     last_issue = None
     for attempt in range(2):

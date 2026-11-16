@@ -86,6 +86,8 @@ def _prompt(campaign: dict, step: dict, previous: list[dict]) -> list[dict]:
         "previous_emails": previous,
     }
     system = (
+        "The email-step context is a required instruction, not optional background. The subject and body must "
+        "clearly carry out its requested topic and action; do not substitute a generic PocketPerks pitch. "
         "Write concise, natural British-English outreach for PocketPerks. Lead with the practical value of a "
         "phone-based loyalty card, not a list of software features. Use only the approved product facts, "
         "campaign instructions, and this step's context. The campaign and step context determine the audience "
