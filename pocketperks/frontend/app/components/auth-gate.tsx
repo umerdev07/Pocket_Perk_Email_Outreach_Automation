@@ -22,6 +22,7 @@ export default function AuthGate({ children }: { children: React.ReactNode }) {
   const [loading, setLoading] = useState(true);
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
   const [busy, setBusy] = useState(false);
   const [recoveryBusy, setRecoveryBusy] = useState(false);
   const [recoverySent, setRecoverySent] = useState(false);
@@ -96,7 +97,7 @@ export default function AuthGate({ children }: { children: React.ReactNode }) {
     {error && <p className="auth-error" role="alert">{error}</p>}
     <form onSubmit={submit}>
       <label>Email<input type="email" autoComplete="username" required value={email} onChange={event => setEmail(event.target.value)} /></label>
-      <label>Password<input type="password" autoComplete="current-password" required value={password} onChange={event => setPassword(event.target.value)} /></label>
+      <label>Password<span className="auth-password-field"><input type={showPassword ? "text" : "password"} autoComplete="current-password" required value={password} onChange={event => setPassword(event.target.value)} /><button type="button" className="auth-password-toggle" aria-label={showPassword ? "Hide password" : "Show password"} aria-pressed={showPassword} onClick={() => setShowPassword(value => !value)}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7S2 12 2 12Z" /><circle cx="12" cy="12" r="3" />{showPassword && <path d="m4 4 16 16" />}</svg></button></span></label>
       <button className="action-button" disabled={busy}>{busy ? "Signing in…" : "Sign in"}</button>
     </form>
     <button className="auth-reset-link" type="button" disabled={!email.trim() || recoveryBusy} onClick={()=>void sendRecoveryLink()}>{recoveryBusy ? "Sending reset link…" : "Forgot password? Send a reset link"}</button>

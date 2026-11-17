@@ -148,6 +148,12 @@ input, textarea, select { max-width: 100%; }
 .auth-card label { display: grid; gap: 7px; color: #25314a; font-size: 14px; font-weight: 600; }
 .auth-card input { width: 100%; min-height: 44px; padding: 10px 12px; border: 1px solid #d7deea; border-radius: 9px; background: #fff; color: #17233b; }
 .auth-card .action-button { min-height: 44px; }
+.auth-password-field { position: relative; display: block; }
+.auth-password-field input { padding-right: 48px; }
+.auth-password-toggle { position: absolute; top: 50%; right: 10px; display: grid; width: 30px; height: 30px; place-items: center; padding: 5px; transform: translateY(-50%); border: 0; border-radius: 6px; color: #64748b; background: transparent; cursor: pointer; }
+.auth-password-toggle:hover { color: var(--brand-green-dark); background: var(--brand-green-soft); }
+.auth-password-toggle:focus-visible { outline: 2px solid var(--brand-green); outline-offset: 1px; }
+.auth-password-toggle svg { width: 19px; height: 19px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
 .auth-card > small:last-child { color: #758098; line-height: 1.5; }
 .auth-error { padding: 11px 13px; border: 1px solid #f0c8c8; border-radius: 9px; color: #9d3030 !important; background: #fff5f5; font-size: 13px; }
 .signout-button { display: block; margin-top: 12px; padding: 7px 10px; border: 1px solid #d9deea; border-radius: 8px; color: #34405b; background: #fff; cursor: pointer; }
