@@ -303,9 +303,16 @@ def test_postgres_auth_login_refresh_reset_and_two_address_email_change():
                           for call in send_mail.await_args_list]
             assert len(tokens) == 2
             first_confirmation = await auth_postgres.confirm_email_change(pool, tokens[0])
-            assert first_confirmation == {"confirmed": True, "complete": False}
+            assert first_confirmation == {
+                "confirmed": True,
+                "complete": False,
+                "confirmed_email": email,
+                "pending_email": changed_email,
+                "current_email": email,
+                "new_email": changed_email,
+            }
             second_confirmation = await auth_postgres.confirm_email_change(pool, tokens[1])
-            assert second_confirmation == {"confirmed": True, "complete": True}
+            assert second_confirmation == {"confirmed": True, "complete": True, "email": changed_email}
             final_session = await auth_postgres.sign_in(pool, settings, changed_email,
                                                         "Second secure test password")
             assert final_session["user"]["email"] == changed_email
