@@ -114,6 +114,13 @@ export async function apiFetch(input: RequestInfo | URL, init: RequestInit = {})
   if (response.status === 401 && session) {
     session = await refreshSession();
     if (session) response = await send(session.access_token);
+    else if (typeof window !== "undefined") {
+      const data = await response.clone().json().catch(() => ({}));
+      const message = typeof data.detail === "string"
+        ? data.detail
+        : "Your session ended after an account change. Please sign in again.";
+      window.dispatchEvent(new CustomEvent("pocketperks:session-expired", { detail: { message } }));
+    }
   }
   return response;
 }

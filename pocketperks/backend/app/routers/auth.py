@@ -28,6 +28,15 @@ class EmailConfirm(BaseModel):
     token: str = Field(min_length=20, max_length=256)
 
 
+class InvitationAccept(BaseModel):
+    token: str = Field(min_length=20, max_length=256)
+    password: str = Field(min_length=12, max_length=1024)
+
+
+class RoleChangeConfirm(BaseModel):
+    token: str = Field(min_length=20, max_length=256)
+
+
 def _storage(request: Request):
     pool = getattr(request.app.state, "postgres_pool", None)
     if pool is None:
@@ -98,3 +107,13 @@ async def email_change(payload: EmailChangeRequest, request: Request):
 @router.post("/email-change/confirm")
 async def email_change_confirm(payload: EmailConfirm, request: Request):
     return await auth_postgres.confirm_email_change(_storage(request), payload.token)
+
+
+@router.post("/invitations/accept")
+async def accept_invitation(payload: InvitationAccept, request: Request):
+    return await auth_postgres.accept_team_invitation(_storage(request), payload.token, payload.password)
+
+
+@router.post("/role-change/confirm")
+async def confirm_role_change(payload: RoleChangeConfirm, request: Request):
+    return await auth_postgres.confirm_team_role_change(_storage(request), payload.token)

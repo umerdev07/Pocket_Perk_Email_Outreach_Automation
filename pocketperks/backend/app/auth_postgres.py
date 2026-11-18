@@ -24,6 +24,7 @@ from app.config import Settings
 ACCESS_TOKEN_SECONDS = 15 * 60
 RESET_TOKEN_MINUTES = 30
 EMAIL_CHANGE_TOKEN_HOURS = 24
+TEAM_CONFIRMATION_HOURS = 48
 LOGIN_WINDOW_MINUTES = 15
 LOGIN_FAILURE_LIMIT = 8
 
@@ -101,7 +102,8 @@ def verify_access_token(settings: Settings, token: str) -> dict:
 
 
 async def _user_for_email(pool, email: str):
-    return await pool.fetchrow("""select u.id,u.email,u.password_hash,u.is_active,m.role
+    return await pool.fetchrow("""select u.id,u.email,u.password_hash,u.is_active,
+        u.access_removed_by_admin,m.role
         from public.users u join public.workspace_members m on m.user_id=u.id
         where u.email=$1""", email)
 
@@ -132,12 +134,16 @@ async def sign_in(pool, settings: Settings, email: str, password: str) -> dict:
         if attempt and attempt["locked_until"] and attempt["locked_until"] > now:
             raise HTTPException(status_code=429, detail="Too many sign-in attempts. Wait a little and try again.")
         user = await _user_for_email(conn, normalized)
-        if not user or not user["is_active"] or not _password_matches(password, user["password_hash"]):
+        if not user or not _password_matches(password, user["password_hash"]):
             count = (attempt["failed_count"] + 1 if attempt and now - attempt["window_started_at"] < timedelta(minutes=LOGIN_WINDOW_MINUTES) else 1)
             locked_until = now + timedelta(minutes=LOGIN_WINDOW_MINUTES) if count >= LOGIN_FAILURE_LIMIT else None
             await conn.execute("""insert into public.auth_login_attempts(email_hash,failed_count,window_started_at,locked_until,updated_at)
                 values($1,$2,$3,$4,$3) on conflict(email_hash) do update set failed_count=$2,
                 window_started_at=$3,locked_until=$4,updated_at=$3""", digest, count, now, locked_until)
+            raise HTTPException(status_code=401, detail="That email and password do not match. Please try again.")
+        if not user["is_active"]:
+            if user["access_removed_by_admin"]:
+                raise HTTPException(status_code=403, detail="A workspace admin removed your access. Contact your PocketPerks admin if you need it restored.")
             raise HTTPException(status_code=401, detail="That email and password do not match. Please try again.")
         await conn.execute("delete from public.auth_login_attempts where email_hash=$1", digest)
         await conn.execute("update public.users set last_login_at=$2 where id=$1", user["id"], now)
@@ -180,13 +186,23 @@ async def workspace_user(pool, token_payload: dict) -> dict:
         raise HTTPException(status_code=401, detail="Your session has expired. Please sign in again.") from None
     except (asyncpg.PostgresError, OSError, TimeoutError):
         raise HTTPException(status_code=503, detail="Workspace sign-in is temporarily unavailable.") from None
-    if row is None or not row["is_active"] or row["role"] not in {"admin", "operator", "reviewer"}:
+    if row is None:
+        try:
+            revoked_reason = await pool.fetchval("""select revoked_reason from public.refresh_sessions
+                where id=$1::uuid and user_id=$2::uuid""", session_id, user_id)
+        except (asyncpg.PostgresError, OSError, TimeoutError):
+            raise HTTPException(status_code=503, detail="Workspace sign-in is temporarily unavailable.") from None
+        if revoked_reason == "email_changed":
+            raise HTTPException(status_code=401, detail="Your login email was changed. Sign in again using the new email address.")
+        raise HTTPException(status_code=401, detail="Your session has expired. Please sign in again.")
+    if not row["is_active"] or row["role"] not in {"admin", "operator", "reviewer"}:
         raise HTTPException(status_code=401, detail="Your session has expired. Please sign in again.")
     return {"id": str(row["id"]), "email": row["email"], "role": row["role"]}
 
 
 def _smtp_ready(settings: Settings) -> bool:
-    return bool(settings.smtp_host and settings.smtp_from_email)
+    return bool(settings.smtp_host and settings.smtp_from_email
+                and settings.smtp_username and settings.smtp_password)
 
 
 def _send_message(settings: Settings, to_email: str, subject: str, body: str) -> None:
@@ -278,18 +294,67 @@ async def confirm_email_change(pool, token: str) -> dict:
     token_hash = hashlib.sha256(token.encode()).hexdigest()
     async with pool.acquire() as conn:
         async with conn.transaction():
-            row = await conn.fetchrow("""select id,user_id,new_email,purpose from public.email_change_tokens
+            row = await conn.fetchrow("""select id,user_id,old_email,new_email,purpose from public.email_change_tokens
                 where token_hash=$1 and used_at is null and expires_at>now() for update""", token_hash)
             if row is None:
                 raise HTTPException(status_code=400, detail="This email confirmation link has expired or was already used.")
             await conn.execute("update public.email_change_tokens set used_at=now() where id=$1", row["id"])
-            remaining = await conn.fetchval("""select count(*) from public.email_change_tokens where user_id=$1
-                and new_email=$2 and expires_at>now() and used_at is null""", row["user_id"], row["new_email"])
+            remaining = await conn.fetchrow("""select purpose,old_email,new_email from public.email_change_tokens
+                where user_id=$1 and new_email=$2 and expires_at>now() and used_at is null
+                order by purpose limit 1""", row["user_id"], row["new_email"])
             if remaining:
-                return {"confirmed": True, "complete": False}
+                pending_email = remaining["old_email"] if remaining["purpose"] == "current" else remaining["new_email"]
+                confirmed_email = row["old_email"] if row["purpose"] == "current" else row["new_email"]
+                return {"confirmed": True, "complete": False, "confirmed_email": confirmed_email,
+                        "pending_email": pending_email,
+                        "current_email": row["old_email"], "new_email": row["new_email"]}
             if await conn.fetchval("select exists(select 1 from public.users where email=$1 and id<>$2)", row["new_email"], row["user_id"]):
                 raise HTTPException(status_code=409, detail="That email address is already in use.")
             await conn.execute("update public.users set email=$2,updated_at=now() where id=$1", row["user_id"], row["new_email"])
             await conn.execute("delete from public.email_change_tokens where user_id=$1", row["user_id"])
-            await conn.execute("update public.refresh_sessions set revoked_at=now() where user_id=$1 and revoked_at is null", row["user_id"])
-            return {"confirmed": True, "complete": True}
+            await conn.execute("""update public.refresh_sessions set revoked_at=now(),
+                revoked_reason='email_changed' where user_id=$1 and revoked_at is null""", row["user_id"])
+            return {"confirmed": True, "complete": True, "email": row["new_email"]}
+
+
+async def accept_team_invitation(pool, token: str, password: str) -> dict:
+    if len(password) < 12:
+        raise HTTPException(status_code=422, detail="Password must contain at least 12 characters.")
+    token_hash = hashlib.sha256(token.encode()).hexdigest()
+    password_hash = _password_hash(password)
+    try:
+        async with pool.acquire() as conn:
+            async with conn.transaction():
+                invitation = await conn.fetchrow("""select id,email,role from public.workspace_invitations
+                    where token_hash=$1 and accepted_at is null and expires_at>now() for update""", token_hash)
+                if invitation is None:
+                    raise HTTPException(status_code=400, detail="This invitation has expired or was already used. Ask your workspace admin to send a new one.")
+                if await conn.fetchval("select exists(select 1 from public.users where email=$1)", invitation["email"]):
+                    raise HTTPException(status_code=409, detail="An account with this email already exists. Contact your workspace admin.")
+                user_id = await conn.fetchval("""insert into public.users(email,password_hash,email_verified_at)
+                    values($1,$2,now()) returning id""", invitation["email"], password_hash)
+                await conn.execute("insert into public.workspace_members(user_id,role) values($1,$2)",
+                                   user_id, invitation["role"])
+                await conn.execute("update public.workspace_invitations set accepted_at=now() where id=$1",
+                                   invitation["id"])
+    except asyncpg.UniqueViolationError:
+        raise HTTPException(status_code=409, detail="An account with this email already exists. Contact your workspace admin.") from None
+    return {"accepted": True, "email": invitation["email"], "role": invitation["role"]}
+
+
+async def confirm_team_role_change(pool, token: str) -> dict:
+    token_hash = hashlib.sha256(token.encode()).hexdigest()
+    async with pool.acquire() as conn:
+        async with conn.transaction():
+            request = await conn.fetchrow("""select t.id,t.user_id,t.new_role,u.email,u.is_active
+                from public.workspace_role_change_tokens t join public.users u on u.id=t.user_id
+                where t.token_hash=$1 and t.accepted_at is null and t.expires_at>now() for update of t,u""", token_hash)
+            if request is None or not request["is_active"]:
+                raise HTTPException(status_code=400, detail="This role confirmation has expired or is no longer valid.")
+            await conn.execute("update public.workspace_members set role=$2 where user_id=$1",
+                               request["user_id"], request["new_role"])
+            await conn.execute("update public.workspace_role_change_tokens set accepted_at=now() where id=$1",
+                               request["id"])
+            await conn.execute("update public.refresh_sessions set revoked_at=now() where user_id=$1 and revoked_at is null",
+                               request["user_id"])
+    return {"confirmed": True, "email": request["email"], "role": request["new_role"]}

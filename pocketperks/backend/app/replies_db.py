@@ -184,7 +184,10 @@ async def mark_reply_opt_out(settings: Settings, reply_id: str, actor_user_id: s
         raise HTTPException(status_code=422, detail="This reply does not have a valid recipient address to suppress.")
     await save_suppressions(settings, [{
         "email": email, "source": "reply_manual", "reason": "Opt-out confirmed by a workspace reviewer.",
-        "lead_id": row.get("lead_id"), "campaign_id": row.get("campaign_id"),
+        # asyncpg returns UUID columns as UUID objects; the JSONB codec needs
+        # JSON-safe strings before sending these values to the SQL routine.
+        "lead_id": str(row["lead_id"]) if row.get("lead_id") else None,
+        "campaign_id": str(row["campaign_id"]) if row.get("campaign_id") else None,
         "actor_user_id": actor_user_id,
     }],pool=pool)
     return {"reply_id": reply_id, "email": email, "opted_out": True}

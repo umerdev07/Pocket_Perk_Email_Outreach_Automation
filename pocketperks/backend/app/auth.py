@@ -19,6 +19,8 @@ async def authenticate_request(request: Request, settings: Settings) -> dict[str
 
 
 def allowed_roles(path: str, method: str) -> set[str]:
+    if path.startswith("/api/admin/users"):
+        return {"admin"}
     if path == "/api/approvals/history/clear" and method == "POST":
         return {"admin"}
     if path.startswith("/api/suppressions"):
@@ -27,6 +29,10 @@ def allowed_roles(path: str, method: str) -> set[str]:
         return {"admin", "operator", "reviewer"}
     if path == "/api/lead-replies" and method == "GET":
         return {"admin", "operator", "reviewer"}
+    if path.startswith("/api/lead-replies/") and path.endswith("/reply") and method == "POST":
+        return {"admin", "operator"}
+    if path.startswith("/api/lead-replies/") and path.endswith("/opt-out") and method == "POST":
+        return {"admin", "operator"}
     if path.startswith("/api/lead-replies/") and method == "PATCH":
         return {"admin", "operator", "reviewer"}
     if path.startswith("/api/lead-replies/") and method == "POST":

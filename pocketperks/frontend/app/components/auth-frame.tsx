@@ -1,5 +1,5 @@
-export default function AuthFrame({ children }: { children: React.ReactNode }) {
-  return <main className="auth-screen">
+export default function AuthFrame({ children, wide = false }: { children: React.ReactNode; wide?: boolean }) {
+  return <main className={`auth-screen${wide ? " auth-screen-wide" : ""}`}>
     <section className="auth-promo" aria-label="PocketPerks workspace information">
       <div className="auth-brand"><b className="auth-mark">P</b><span>PocketPerks<small>Outreach workspace</small></span></div>
       <div className="auth-promo-copy">

@@ -4,6 +4,7 @@ import { apiFetch } from "../../lib/auth";
 import { Area, CartesianGrid, Cell, ComposedChart, Line, Pie, PieChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 
 import { useCallback, useEffect, useState } from "react";
+import type { WorkspaceRole } from "../../lib/auth";
 
 type RunDetail = {
   run_id: string;
@@ -95,10 +96,17 @@ type Summary = {
 type Props = {
   apiBase: string;
   refreshKey: number;
+  role: WorkspaceRole;
   onNavigate: (page: "Campaigns" | "Human Approval" | "Lead Replies") => void;
 };
 
-export default function DashboardSummary({ apiBase, refreshKey, onNavigate }: Props) {
+const ROLE_GUIDANCE: Record<WorkspaceRole, { title: string; description: string }> = {
+  admin: { title: "Admin · Workspace owner", description: "Manage team members and roles, oversee workspace data, and use all outreach and review tools." },
+  operator: { title: "Operator · Outreach work", description: "Import leads, prepare and manage campaigns, and handle workspace replies. Team roles are managed by an admin." },
+  reviewer: { title: "Reviewer · Email review", description: "Review flagged drafts, approve or reject messages, and read lead replies. Admins and operators send replies and manage opt-outs; only admins delete replies." },
+};
+
+export default function DashboardSummary({ apiBase, refreshKey, role, onNavigate }: Props) {
   const [summary, setSummary] = useState<Summary | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
@@ -253,6 +261,10 @@ export default function DashboardSummary({ apiBase, refreshKey, onNavigate }: Pr
           {loading ? "Updating…" : "Refresh"}
         </button>
       </div>
+      <aside className={`dashboard-role-card role-${role}`} aria-label="Your workspace role">
+        <span className="dashboard-role-icon" aria-hidden="true">{role === "admin" ? "★" : role === "operator" ? "↗" : "✓"}</span>
+        <div><small>YOUR WORKSPACE ROLE</small><b>{ROLE_GUIDANCE[role].title}</b><p>{ROLE_GUIDANCE[role].description}</p></div>
+      </aside>
       {error && <div className="dashboard-error" role="alert"><span>{error}</span>
         <button type="button" className="link-button" onClick={() => void loadSummary()}>Try again</button></div>}
       <div className="dashboard-cards">

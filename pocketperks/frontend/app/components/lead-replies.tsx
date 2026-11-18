@@ -20,7 +20,7 @@ type Reply = {
   campaigns?: { name?: string } | null;
 };
 
-type Props = { apiBase: string; canManageSuppressions?: boolean };
+type Props = { apiBase: string; canManageSuppressions?: boolean; canManageOptOuts?: boolean; canReply?: boolean; canDelete?: boolean };
 type ReadFilter = "all" | "unread" | "read";
 
 function splitQuotedMessage(body: string) {
@@ -33,7 +33,7 @@ function splitQuotedMessage(body: string) {
   return { reply: lines.slice(0, marker).join("\n").trim(), quoted: lines.slice(marker).join("\n").trim() };
 }
 
-export default function LeadReplies({ apiBase, canManageSuppressions = false }: Props) {
+export default function LeadReplies({ apiBase, canManageSuppressions = false, canManageOptOuts = false, canReply = true, canDelete = false }: Props) {
   const { confirm, dialog } = useConfirmDialog();
   const [replies, setReplies] = useState<Reply[]>([]);
   const [hasMore, setHasMore] = useState(false);
@@ -291,7 +291,7 @@ export default function LeadReplies({ apiBase, canManageSuppressions = false }: 
             {expanded && <div className="reply-expanded"><div className="reply-meta"><span>From <b>{reply.from_email}</b></span>
               {reply.leads?.email && <span>Lead <b>{reply.leads.email}</b></span>}{reply.campaigns?.name && <span>Campaign <b>{reply.campaigns.name}</b></span>}
             </div>{reply.opted_out && <p className="reply-opt-out-badge">Opted out · future campaigns are blocked</p>}<h3>{reply.subject || "(no subject)"}</h3><div className="reply-body-card"><p>{cleanBody || "No new reply text was detected."}</p></div>
-              {!reply.opted_out && <form className="reply-compose" onSubmit={event => { event.preventDefault(); void sendReply(reply); }}>
+              {!reply.opted_out && canReply && <form className="reply-compose" onSubmit={event => { event.preventDefault(); void sendReply(reply); }}>
                 <label htmlFor={`reply-compose-${reply.id}`}>Reply in this conversation</label>
                 <textarea id={`reply-compose-${reply.id}`} rows={4} maxLength={20000} value={replyDrafts[reply.id] || ""}
                   onChange={event => setReplyDrafts(current => ({ ...current, [reply.id]: event.target.value }))}
@@ -302,8 +302,9 @@ export default function LeadReplies({ apiBase, canManageSuppressions = false }: 
                 {replyFeedback[reply.id] && <p role={replyFeedback[reply.id].kind === "error" ? "alert" : "status"}
                   className={replyFeedback[reply.id].kind === "error" ? "error" : "success"}>{replyFeedback[reply.id].text}</p>}
               </form>}
-              <div className="reply-actions"><button type="button" className="secondary-button reply-action-icon reply-delete-button" disabled={deleteBusy === reply.id} onClick={() => void deleteLeadReply(reply)} aria-label={deleteBusy === reply.id ? "Deleting reply" : "Delete reply from this workspace and connected inbox"} title={deleteBusy === reply.id ? "Deleting reply" : "Delete reply"}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M10 11v6m4-6v6M6 7l1 13h10l-1-13M9 7V4h6v3"/></svg></button>
-                {reply.opted_out ? <span className="reply-opt-out-badge reply-action-status"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12 4 4L19 6"/></svg>Opt-out recorded</span> : <button type="button" className="secondary-button reply-action-button reply-action-optout" disabled={optOutBusy === reply.id} onClick={() => void markOptOut(reply)} title="Block this address from future campaigns" aria-label="Mark this address as opted out"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="m5.6 5.6 12.8 12.8"/></svg>{optOutBusy === reply.id ? "Saving…" : "Opt out"}</button>}
+              {!reply.opted_out && !canReply && <p className="reply-note">You can read this conversation. Admins and operators send replies and manage opt-outs.</p>}
+              <div className="reply-actions">{canDelete && <button type="button" className="secondary-button reply-action-icon reply-delete-button" disabled={deleteBusy === reply.id} onClick={() => void deleteLeadReply(reply)} aria-label={deleteBusy === reply.id ? "Deleting reply" : "Delete reply from this workspace and connected inbox"} title={deleteBusy === reply.id ? "Deleting reply" : "Delete reply"}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h16M10 11v6m4-6v6M6 7l1 13h10l-1-13M9 7V4h6v3"/></svg></button>}
+                {reply.opted_out ? <span className="reply-opt-out-badge reply-action-status"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12 4 4L19 6"/></svg>Opt-out recorded</span> : canManageOptOuts && <button type="button" className="secondary-button reply-action-button reply-action-optout" disabled={optOutBusy === reply.id} onClick={() => void markOptOut(reply)} title="Block this address from future campaigns" aria-label="Mark this address as opted out"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="9"/><path d="m5.6 5.6 12.8 12.8"/></svg>{optOutBusy === reply.id ? "Saving…" : "Opt out"}</button>}
                 {canManageSuppressions && reply.opted_out && <button type="button" className="secondary-button reply-action-button reply-action-reenable" disabled={releaseBusy === reply.id} onClick={() => {
                   setReleaseReplyId(current => current === reply.id ? "" : reply.id);
                   setReleaseReason(""); setReleaseConsent(false); setError(""); setNotice("");

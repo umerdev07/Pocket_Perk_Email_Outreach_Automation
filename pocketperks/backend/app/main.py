@@ -14,6 +14,7 @@ from app.postgres import check_pool, open_pool
 from app.auth import allowed_roles, authenticate_request
 from app.routers.leads import batch_router, router as leads_router
 from app.routers.auth import router as auth_router
+from app.routers.team import router as team_router
 from app.routers.campaigns import router as campaigns_router
 from app.routers.drafts import router as drafts_router
 from app.routers.campaign_runs import router as campaign_runs_router, runs_router
@@ -67,6 +68,7 @@ def create_app(*, auth_enabled: bool = True, queue_worker_enabled: bool = False)
     app.state.settings = settings
     app.state.postgres_pool = None
     app.include_router(auth_router)
+    app.include_router(team_router)
     app.include_router(leads_router)
     app.include_router(batch_router)
     app.include_router(campaigns_router)
@@ -94,7 +96,8 @@ def create_app(*, auth_enabled: bool = True, queue_worker_enabled: bool = False)
                 or (path == "/api/webhooks/instantly" and request.method == "POST")
                 or path in {"/api/auth/sign-in", "/api/auth/refresh", "/api/auth/sign-out",
                             "/api/auth/password-reset", "/api/auth/password-reset/confirm",
-                            "/api/auth/email-change/confirm"}
+                            "/api/auth/email-change/confirm", "/api/auth/invitations/accept",
+                            "/api/auth/role-change/confirm"}
                 or request.method == "OPTIONS"):
             return await call_next(request)
         try:

@@ -28,18 +28,21 @@ export default function AuthGate({ children }: { children: React.ReactNode }) {
   const [recoverySent, setRecoverySent] = useState(false);
   const [passwordResetPath, setPasswordResetPath] = useState(false);
   const [error, setError] = useState("");
+  const [loginNotice, setLoginNotice] = useState("");
 
   async function loadWorkspaceUser(_session: AuthSession | null) {
     if (!_session) { setUser(null); return; }
     const response = await apiFetch("/api/auth/me");
     const data = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error("We couldn't verify your workspace access. Please sign in again or contact your workspace admin.");
+    if (!response.ok) throw new Error(typeof data.detail === "string"
+      ? data.detail
+      : "We couldn't verify your workspace access. Please sign in again or contact your workspace admin.");
     setUser(data as WorkspaceUser);
   }
 
   useEffect(() => {
     let active = true;
-    if (window.location.pathname === "/auth/reset-password") {
+    if (["/auth/reset-password", "/auth/confirm-email", "/auth/accept-invite", "/auth/confirm-role"].includes(window.location.pathname)) {
       setPasswordResetPath(true);
       setLoading(false);
       return () => { active = false; };
@@ -52,6 +55,35 @@ export default function AuthGate({ children }: { children: React.ReactNode }) {
     return () => { active = false; };
   }, []);
 
+  useEffect(() => {
+    if (pathname !== "/login") return;
+    const notice = new URLSearchParams(window.location.search).get("notice");
+    if (notice === "email-changed") {
+      setLoginNotice("Your login email was changed. Sign in with the new email address and your existing password.");
+    } else if (notice === "session-expired") {
+      setLoginNotice("Your session ended after an account change. Please sign in again.");
+    }
+  }, [pathname]);
+
+  useEffect(() => {
+    const onSessionExpired = (event: Event) => {
+      const detail = (event as CustomEvent<{ message?: string }>).detail;
+      setUser(null);
+      setPassword("");
+      setError("");
+      setLoginNotice(detail?.message || "Your session ended after an account change. Please sign in again.");
+      router.replace("/login?notice=session-expired");
+    };
+    window.addEventListener("pocketperks:session-expired", onSessionExpired);
+    return () => window.removeEventListener("pocketperks:session-expired", onSessionExpired);
+  }, [router]);
+
+  useEffect(() => {
+    if (loading || user || pathname === "/" || pathname === "/login" || pathname === "/auth/reset-password" || pathname === "/auth/confirm-email" || pathname === "/auth/accept-invite" || pathname === "/auth/confirm-role") return;
+    const next = `${window.location.pathname}${window.location.search}`;
+    router.replace(`/login?next=${encodeURIComponent(next)}`);
+  }, [loading, pathname, router, user]);
+
   async function submit(event: FormEvent) {
     event.preventDefault();
     setError("");
@@ -60,7 +92,11 @@ export default function AuthGate({ children }: { children: React.ReactNode }) {
       const session = await signIn(email.trim(), password);
       await loadWorkspaceUser(session);
       setPassword("");
-      if (pathname === "/login") router.push("/workspace");
+      if (pathname === "/login") {
+        const requestedPath = new URLSearchParams(window.location.search).get("next") || "/workspace";
+        const safePath = requestedPath.startsWith("/") && !requestedPath.startsWith("//") ? requestedPath : "/workspace";
+        router.replace(safePath);
+      }
     } catch (cause) {
       await signOut();
       setUser(null);
@@ -83,9 +119,10 @@ export default function AuthGate({ children }: { children: React.ReactNode }) {
   async function logout() {
     await signOut();
     setUser(null);
+    router.replace("/login");
   }
 
-  if (pathname === "/") return children;
+  if (pathname === "/" || ["/auth/reset-password", "/auth/confirm-email", "/auth/accept-invite", "/auth/confirm-role"].includes(pathname)) return children;
   if (loading) return <AuthFrame><section className="auth-card auth-loading"><span className="auth-spinner" /><p>Checking your workspace sign-in…</p></section></AuthFrame>;
   if (passwordResetPath) return children;
   if (user) return <AuthContext.Provider value={{ user, logout }}>{children}</AuthContext.Provider>;
@@ -94,6 +131,7 @@ export default function AuthGate({ children }: { children: React.ReactNode }) {
     <small className="auth-card-kicker">WELCOME BACK</small>
     <h1 id="auth-title">Sign in to your workspace</h1>
     <p>Use the email address invited to PocketPerks.</p>
+    {loginNotice && <p className="auth-success" role="status">{loginNotice}</p>}
     {error && <p className="auth-error" role="alert">{error}</p>}
     <form onSubmit={submit}>
       <label>Email<input type="email" autoComplete="username" required value={email} onChange={event => setEmail(event.target.value)} /></label>
