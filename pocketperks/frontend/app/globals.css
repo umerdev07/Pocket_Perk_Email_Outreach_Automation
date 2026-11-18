@@ -633,6 +633,11 @@ body { background: var(--paper); color: var(--ink); }
 .landing-video-placeholder{border-color:#dfe8df;background:#ffffffc9;box-shadow:0 12px 32px rgb(24 53 42 / 7%)}
 .landing-video-frame{background:linear-gradient(135deg,#1b6338,#103a27 65%,#183f2b)}
 .landing-play{border-color:#ffffff70;background:#ffffff20}
+.landing-overview-card{display:grid;gap:11px;padding:18px;background:#fff;border-color:var(--line);box-shadow:0 12px 32px rgb(24 53 42 / 7%)}
+.landing-overview-card article{display:grid;gap:5px;padding:14px 16px;border:1px solid var(--line);border-radius:10px;background:linear-gradient(110deg,#fff7f5,#f6faf6)}
+.landing-overview-card article>span{color:var(--brand-green-dark);font-size:9px;letter-spacing:.12em;font-weight:750}
+.landing-overview-card article>b{color:var(--ink);font-size:13px}
+.landing-overview-card article>small{color:var(--muted);font-size:11px;line-height:1.5}
 .landing-faq-list details,.landing-faq-list details:first-child{border-color:var(--line)}
 .landing-faq-list summary>span{background:var(--brand-green-soft);color:var(--brand-green-dark)}
 .landing-faq-list details[open] summary>span{color:var(--brand-red)}

@@ -49,7 +49,7 @@ export default function AcceptInvitationPage() {
     <small className="auth-card-kicker">WORKSPACE INVITATION</small>
     <h1 id="invite-title">Join PocketPerks</h1>
     {!tokenChecked ? <p role="status">Checking your invitation link…</p> : success ? <><p className="auth-success" role="status">{email} is now set up as {role}. You can sign in with your new password.</p><a className="action-button auth-return" href="/login">Go to sign in</a></> : token ? <>
-      <p>Set a password to accept your invitation. This link can only be used once.</p>
+      <p>Create your password to activate your invited workspace access. This link can only be used once.</p>
       {error && <p className="auth-error" role="alert">{error}</p>}
       <form onSubmit={event => void submit(event)}>
         <label>Password<input type="password" autoComplete="new-password" minLength={12} required value={password} onChange={event => setPassword(event.target.value)} /></label>

@@ -3,8 +3,8 @@ import AuthGate from "./components/auth-gate";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "PocketPerks | Thoughtful local outreach",
-  description: "A clear workspace for preparing PocketPerks emails, reviewing every message, and managing replies.",
+  title: "PocketPerks | Outreach workspace",
+  description: "Import and check business leads, prepare and review campaign emails, manage sending schedules, and handle replies in one shared workspace.",
 };
 
 export default function RootLayout({ children }: Readonly<{ children: React.ReactNode }>) {

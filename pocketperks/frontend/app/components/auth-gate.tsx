@@ -130,7 +130,7 @@ export default function AuthGate({ children }: { children: React.ReactNode }) {
   return <AuthFrame><section className="auth-card" aria-labelledby="auth-title">
     <small className="auth-card-kicker">WELCOME BACK</small>
     <h1 id="auth-title">Sign in to your workspace</h1>
-    <p>Use the email address invited to PocketPerks.</p>
+    <p>Sign in with the work email your PocketPerks administrator invited.</p>
     {loginNotice && <p className="auth-success" role="status">{loginNotice}</p>}
     {error && <p className="auth-error" role="alert">{error}</p>}
     <form onSubmit={submit}>
@@ -140,6 +140,6 @@ export default function AuthGate({ children }: { children: React.ReactNode }) {
     </form>
     <button className="auth-reset-link" type="button" disabled={!email.trim() || recoveryBusy} onClick={()=>void sendRecoveryLink()}>{recoveryBusy ? "Sending reset link…" : "Forgot password? Send a reset link"}</button>
     {recoverySent && <p className="auth-success" role="status">If that account exists, a password reset link has been sent to its email.</p>}
-    <div className="auth-card-foot"><span className="auth-lock">⌑</span><small>Invite-only access. Need an account? Ask your workspace admin.</small></div>
+    <div className="auth-card-foot"><span className="auth-lock">⌑</span><small>Access is by invitation. Need an account? Ask your PocketPerks administrator.</small></div>
   </section></AuthFrame>;
 }
